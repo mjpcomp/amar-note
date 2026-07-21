@@ -14,21 +14,21 @@ extern "C" {
 
 // Global sound switch.
 // Used by the .ino to disable sounds during recording.
-static bool palaSoundEnabled = true;
+static bool amarSoundEnabled = true;
 
-inline void palaSoundSetEnabled(bool enabled) {
-  palaSoundEnabled = enabled;
+inline void amarSoundSetEnabled(bool enabled) {
+  amarSoundEnabled = enabled;
   if (!enabled) {
     audio_playback_set_vol(0);
   }
 }
 
-inline bool palaSoundIsEnabled() {
-  return palaSoundEnabled;
+inline bool amarSoundIsEnabled() {
+  return amarSoundEnabled;
 }
 
 inline void soundEnable() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   audio_playback_set_vol(75);
 }
 
@@ -38,7 +38,7 @@ inline void soundDisable() {
 }
 
 inline void playToneUI(float freq, int durationMs, float volume) {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
 
   const int sampleRate = SAMPLE_RATE;
   const int channels = 2;
@@ -75,21 +75,21 @@ inline void playToneUI(float freq, int durationMs, float volume) {
 }
 
 inline void soundNext() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(1100.0f, 10, 0.11f);
   soundDisable();
 }
 
 inline void soundSelect() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(1450.0f, 14, 0.13f);
   soundDisable();
 }
 
 inline void soundBack() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(650.0f, 18, 0.10f);
   soundDisable();
@@ -98,7 +98,7 @@ inline void soundBack() {
 
 
 inline void soundRecordingStart() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   // Short upward tactile cue before recording starts.
   playToneUI(760.0f, 18, 0.12f);
@@ -108,7 +108,7 @@ inline void soundRecordingStart() {
 }
 
 inline void soundSaved() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(1040.0f, 45, 0.11f);
   delay(18);
@@ -117,7 +117,7 @@ inline void soundSaved() {
 }
 
 inline void soundSuccess() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(880.0f, 35, 0.10f);
   delay(12);
@@ -128,7 +128,7 @@ inline void soundSuccess() {
 }
 
 inline void soundDelete() {
-  if (!palaSoundEnabled) return;
+  if (!amarSoundEnabled) return;
   soundEnable();
   playToneUI(520.0f, 30, 0.11f);
   delay(10);
