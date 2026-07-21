@@ -1,58 +1,113 @@
 #include "config_store.h"
 #include <Preferences.h>
 #include <string.h>
-#include <stdio.h>
+#include "../../secrets.h"
 
-// ============================================================
-// config_store — Amar Note NVS-backed settings
-// All keys live in the NVS namespace defined by NVS_NAMESPACE ("amar").
-// ============================================================
+namespace {
+  Preferences prefs;
+  const char* NS = "amar";
 
-static Preferences prefs;
-
-void configLoad() {
-    prefs.begin(NVS_NAMESPACE, false);
+  // secrets.h ships with "...." placeholders; treat all-dots or empty as unset.
+  bool isPlaceholder(const char* s) {
+    if (!s || s[0] == '\0') return true;
+    return strspn(s, ".") == strlen(s);
+  }
 }
 
-void configSave() {
-    // Preferences auto-commits on each put; this is a no-op hook for callers.
+namespace cfg {
+
+void begin() {
+  prefs.begin(NS, false);
+  // One-time migration: seed NVS from compiled secrets.h only for real (non-
+  // placeholder) values that aren't already stored. After this, secrets live in
+  // NVS and can be rotated at runtime without reflashing.
+  if (!prefs.isKey("ssid") && !isPlaceholder(WIFI_SSID)) {
+    prefs.putString("ssid", WIFI_SSID);
+    prefs.putString("pass", WIFI_PASS);
+  }
+  if (!prefs.isKey("oaikey") && !isPlaceholder(OPENAI_KEY)) {
+    prefs.putString("oaikey", OPENAI_KEY);
+  }
+
+  // One-time correction (cfgv=1): force AI-enrich back on if it was ever
+  // inadvertently cleared by an older portal save with the box unchecked.
+  if (!prefs.isKey("cfgv")) {
+    prefs.putBool("ghai", true);
+    prefs.putUInt("cfgv", 1);
+  }
 }
 
-// Wi-Fi
-String configGetSSID()     { return prefs.getString("wifi_ssid", ""); }
-String configGetPass()     { return prefs.getString("wifi_pass", ""); }
-void   configSetSSID(const String& v) { prefs.putString("wifi_ssid", v); }
-void   configSetPass(const String& v) { prefs.putString("wifi_pass", v); }
+String wifiSsid()  { return prefs.getString("ssid",    ""); }
+String wifiPass()  { return prefs.getString("pass",    ""); }
+String openaiKey() { return prefs.getString("oaikey",  ""); }
+String groqKey()   { return prefs.getString("groqkey", ""); }
 
-// OpenAI
-String configGetOpenAIKey()                { return prefs.getString("openai_key", ""); }
-void   configSetOpenAIKey(const String& v) { prefs.putString("openai_key", v); }
+uint8_t sttProvider() { return (uint8_t)prefs.getUChar("sttprov", 0); }
 
-// Groq free-tier STT
-String configGetGroqKey()                { return prefs.getString("groq_key", ""); }
-void   configSetGroqKey(const String& v) { prefs.putString("groq_key", v); }
+bool hasWifi()      { return wifiSsid().length() > 0; }
+bool hasOpenAiKey() { return openaiKey().length() > 0; }
+bool hasGroqKey()   { return groqKey().length() > 0; }
+bool hasSttKey()    { return hasOpenAiKey() || hasGroqKey(); }
 
-// STT provider: 0 = OpenAI Whisper, 1 = Groq Whisper
-uint8_t configGetSttProvider()               { return (uint8_t)prefs.getUChar("stt_provider", 0); }
-void    configSetSttProvider(uint8_t v)      { prefs.putUChar("stt_provider", v); }
-
-// GitHub
-String configGetGHRepo()    { return prefs.getString("gh_repo",   ""); }
-String configGetGHBranch()  { return prefs.getString("gh_branch", "main"); }
-String configGetGHDir()     { return prefs.getString("gh_dir",    "VoiceNotes"); }
-String configGetGHToken()   { return prefs.getString("gh_token",  ""); }
-bool   configGetGHEnabled() { return prefs.getBool("gh_enabled", false); }
-bool   configGetAIEnrich()  { return prefs.getBool("ai_enrich",  false); }
-
-void configSetGHRepo(const String& v)   { prefs.putString("gh_repo",   v); }
-void configSetGHBranch(const String& v) { prefs.putString("gh_branch", v); }
-void configSetGHDir(const String& v)    { prefs.putString("gh_dir",    v); }
-void configSetGHToken(const String& v)  { prefs.putString("gh_token",  v); }
-void configSetGHEnabled(bool v)         { prefs.putBool("gh_enabled",  v); }
-void configSetAIEnrich(bool v)          { prefs.putBool("ai_enrich",   v); }
-
-// Convenience: did the user complete first-time setup?
-bool configIsProvisioned() {
-    return configGetSSID().length() > 0 &&
-           (configGetOpenAIKey().length() > 0 || configGetGroqKey().length() > 0);
+bool setWifi(const String& ssid, const String& pass) {
+  if (ssid.length() == 0) return false;
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  return true;
 }
+
+bool setOpenAiKey(const String& key) {
+  prefs.putString("oaikey", key);
+  return true;
+}
+
+bool setGroqKey(const String& key) {
+  prefs.putString("groqkey", key);
+  return true;
+}
+
+void setSttProvider(uint8_t p) { prefs.putUChar("sttprov", p); }
+
+// ── GitHub / Obsidian vault ─────────────────────────────────────────────────
+// NVS keys must be <=15 chars.
+String githubToken()  { return prefs.getString("ghtok",    ""); }
+String githubRepo()   { return prefs.getString("ghrepo",   ""); }
+String githubBranch() { String b = prefs.getString("ghbranch", ""); return b.length() ? b : "main"; }
+String githubDir()    { String d = prefs.getString("ghdir",    ""); return d.length() ? d : "VoiceNotes"; }
+bool   githubEnabled()  { return prefs.getBool("ghon", false); }
+bool   githubAiEnrich() { return prefs.getBool("ghai", true);  }
+
+bool hasGithub() {
+  return githubEnabled() && githubToken().length() > 0 && githubRepo().indexOf('/') > 0;
+}
+
+bool setGithubToken(const String& token) { prefs.putString("ghtok", token); return true; }
+
+bool setGithubRepo(const String& ownerRepo) {
+  String r = ownerRepo; r.trim();
+  while (r.endsWith("/")) r.remove(r.length() - 1);
+  if (r.indexOf('/') <= 0 || r.indexOf('/') != r.lastIndexOf('/')) return false;
+  prefs.putString("ghrepo", r);
+  return true;
+}
+
+bool setGithubBranch(const String& branch) {
+  String b = branch; b.trim();
+  prefs.putString("ghbranch", b);
+  return true;
+}
+
+bool setGithubDir(const String& dir) {
+  String d = dir; d.trim();
+  while (d.endsWith("/"))   d.remove(d.length() - 1);
+  while (d.startsWith("/")) d.remove(0, 1);
+  prefs.putString("ghdir", d);
+  return true;
+}
+
+void setGithubEnabled(bool on)  { prefs.putBool("ghon", on); }
+void setGithubAiEnrich(bool on) { prefs.putBool("ghai", on); }
+
+void factoryReset() { prefs.clear(); }
+
+}  // namespace cfg

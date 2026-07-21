@@ -11,11 +11,11 @@ namespace cfg {
   String wifiPass();
   String openaiKey();
   String groqKey();                                     // Groq free-tier STT key (gsk_...)
-  uint8_t sttProvider();                                // 0 = OpenAI, 1 = Groq
+  uint8_t sttProvider();                                // 0 = OpenAI Whisper, 1 = Groq
   bool   hasWifi();                                     // Wi-Fi credentials present
-  bool   hasOpenAiKey();                                // transcription key present
+  bool   hasOpenAiKey();                                // OpenAI key present
   bool   hasGroqKey();                                  // Groq key present
-  bool   hasSttKey();                                   // any STT key present
+  bool   hasSttKey();                                   // any STT key present (OpenAI or Groq)
   bool   setWifi(const String& ssid, const String& pass);
   bool   setOpenAiKey(const String& key);
   bool   setGroqKey(const String& key);

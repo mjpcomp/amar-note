@@ -40,7 +40,7 @@ static String dechunkBody(const String& in) {
   return out;
 }
 
-// ── Generic HTTPS request ─────────────────────────────────────────────────
+// ── Generic HTTPS request ─────────────────────────────────────────────────────
 // Reads the response body in 512-byte chunks instead of one byte at a time
 // to avoid the severe per-byte TLS overhead on WiFiClientSecure.
 static bool httpsSend(const char* host, const String& method, const String& path,
@@ -102,8 +102,8 @@ static bool httpsSend(const char* host, const String& method, const String& path
 static String transcribeWav(const char* wavPath) {
   if (WiFi.status() != WL_CONNECTED) return "";
 
-  uint8_t provider  = configGetSttProvider();
-  String  apiKey    = (provider == 1) ? configGetGroqKey() : configGetOpenAIKey();
+  uint8_t provider  = cfg::sttProvider();
+  String  apiKey    = (provider == 1) ? cfg::groqKey() : cfg::openaiKey();
   if (apiKey.length() == 0) return "";
 
   const char* host  = (provider == 1) ? "api.groq.com"    : "api.openai.com";
@@ -141,7 +141,7 @@ static String transcribeWav(const char* wavPath) {
   client.printf("Content-Type: multipart/form-data; boundary=%s\r\n", boundary.c_str());
   client.printf("Content-Length: %u\r\nConnection: close\r\n\r\n", (unsigned)totalLen);
 
-  // Stream body: part header → file bytes (512-byte blocks) → part footer
+  // Stream body: part header -> file bytes (512-byte blocks) -> part footer
   client.print(partHead);
   uint8_t buf[512];
   size_t remaining = fileSize;
@@ -253,7 +253,7 @@ static bool enrichNote(const String& transcript, const String& nowLocal,
                        std::vector<String>& topics, NoteEvent& evt) {
   title = ""; summary = ""; cleaned = ""; topics.clear();
   evt = NoteEvent();
-  String key = configGetOpenAIKey();
+  String key = cfg::openaiKey();
   if (key.length() == 0 || WiFi.status() != WL_CONNECTED) return false;
 
   String input = transcript;
@@ -399,10 +399,10 @@ static String buildNoteMarkdown(int num, const String& uid,
 // ── GitHub Contents API ────────────────────────────────────────────────────
 static int githubGetSha(const String& path, String& sha) {
   sha = "";
-  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path) +
-               "?ref=" + configGetGHBranch();
+  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path) +
+               "?ref=" + cfg::githubBranch();
   std::vector<String> headers = {
-    "Authorization: Bearer " + configGetGHToken(),
+    "Authorization: Bearer " + cfg::githubToken(),
     "User-Agent: AmarNote",
     "Accept: application/vnd.github+json"
   };
@@ -431,13 +431,13 @@ static GhResult githubPutFile(const String& path, const String& content, const S
   DynamicJsonDocument doc(b64.length() + 512);
   doc["message"] = msg;
   doc["content"] = b64;
-  doc["branch"]  = configGetGHBranch();
+  doc["branch"]  = cfg::githubBranch();
   if (sha.length()) doc["sha"] = sha;
   String body; serializeJson(doc, body);
 
-  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path);
+  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path);
   std::vector<String> headers = {
-    "Authorization: Bearer " + configGetGHToken(),
+    "Authorization: Bearer " + cfg::githubToken(),
     "User-Agent: AmarNote",
     "Accept: application/vnd.github+json",
     "Content-Type: application/json"
@@ -465,12 +465,12 @@ static GhResult githubDeleteFile(const String& path, const String& msg) {
   DynamicJsonDocument doc(sha.length() + 512);
   doc["message"] = msg;
   doc["sha"]     = sha;
-  doc["branch"]  = configGetGHBranch();
+  doc["branch"]  = cfg::githubBranch();
   String body; serializeJson(doc, body);
 
-  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path);
+  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path);
   std::vector<String> headers = {
-    "Authorization: Bearer " + configGetGHToken(),
+    "Authorization: Bearer " + cfg::githubToken(),
     "User-Agent: AmarNote",
     "Accept: application/vnd.github+json",
     "Content-Type: application/json"
@@ -488,7 +488,7 @@ static GhResult githubDeleteFile(const String& path, const String& msg) {
 static String pickVaultStem(int num, const String& title) {
   String base = tagSlug(title);
   if (!base.length()) base = "Note";
-  String dir = configGetGHDir();
+  String dir = cfg::githubDir();
   for (int n = 1; n <= 50; n++) {
     String stem = (n == 1) ? base : (base + " " + String(n));
     String sha;
@@ -500,8 +500,6 @@ static String pickVaultStem(int num, const String& title) {
 }
 
 // Only rebuild MOCs for the tags that were actually touched in this sync run.
-// Previously this rebuilt every non-empty tag on every sync (up to 20 extra
-// GitHub API calls per session for untouched tags).
 static GhResult buildAndPushTagMOC(const char* tag) {
   String md = "---\ntitle: \"" + yamlEsc(String(tag)) + "\"\ntype: MOC\n---\n\n# " +
               String(tag) + "\n\n";
@@ -513,13 +511,13 @@ static GhResult buildAndPushTagMOC(const char* tag) {
                                      : ("- [[" + uid + "]]\n");
     }
   }
-  String path = configGetGHDir() + "/Tags/" + tagSlug(String(tag)) + ".md";
+  String path = cfg::githubDir() + "/Tags/" + tagSlug(String(tag)) + ".md";
   return githubPutFile(path, md, "Update tag MOC: " + String(tag));
 }
 
 // ── Vault deletion queue ───────────────────────────────────────────────────
 void obsidianFlushDeletes() {
-  if (!configGetGHEnabled() || WiFi.status() != WL_CONNECTED) return;
+  if (!cfg::hasGithub() || WiFi.status() != WL_CONNECTED) return;
   if (!SD_MMC.exists(TOMBS_FILE)) return;
 
   std::vector<String> uids, tags;
@@ -540,7 +538,7 @@ void obsidianFlushDeletes() {
   std::vector<String> affectedTags;
   for (size_t i = 0; i < uids.size(); i++) {
     if (WiFi.status() != WL_CONNECTED) break;
-    String path = configGetGHDir() + "/" + uids[i] + ".md";
+    String path = cfg::githubDir() + "/" + uids[i] + ".md";
     GhResult r = githubDeleteFile(path, "Delete " + uids[i] + ".md");
     if (r == GH_OK) {
       done[i] = true;
@@ -575,7 +573,7 @@ void obsidianFlushDeletes() {
 
 // ── Public entry point ─────────────────────────────────────────────────────
 void obsidianSyncAll() {
-  if (!configGetGHEnabled() || WiFi.status() != WL_CONNECTED) return;
+  if (!cfg::hasGithub() || WiFi.status() != WL_CONNECTED) return;
 
   obsidianFlushDeletes();
 
@@ -585,7 +583,6 @@ void obsidianSyncAll() {
   if (pending == 0) return;
 
   int done = 0; bool pushedAny = false;
-  // Accumulate only the tags belonging to notes actually pushed this run.
   std::vector<String> dirtyTags;
 
   for (int i = 0; i < (int)noteIndex.size(); i++) {
@@ -602,24 +599,19 @@ void obsidianSyncAll() {
     String transcript = "";
     if (tf) { while (tf.available() && transcript.length() < 131072) transcript += (char)tf.read(); tf.close(); }
 
-    // Step 1: transcribe if we don't already have text
-    // (transcript file is written by record.cpp after recording; this path
-    //  handles notes that were saved without a transcription pass)
     if (transcript.length() == 0) {
       char wp[64]; snprintf(wp, sizeof(wp), "%s/note_%03d.wav", NOTES_DIR, num);
       if (SD_MMC.exists(wp)) {
         transcript = transcribeWav(wp);
         if (transcript.length() > 0) {
-          // Persist so we don't re-transcribe on the next sync
           File wf = SD_MMC.open(tp, FILE_WRITE);
           if (wf) { wf.print(transcript); wf.close(); }
         }
       }
     }
 
-    // Step 2: AI enrichment
     String title, summary, cleaned; std::vector<String> topics; NoteEvent evt;
-    bool aiOn = configGetAIEnrich(), haveKey = configGetOpenAIKey().length() > 0;
+    bool aiOn = cfg::githubAiEnrich(), haveKey = cfg::hasOpenAiKey();
     if (aiOn && haveKey) {
       bool ok = enrichNote(transcript, noteCreatedDeviceLabel(num),
                            title, summary, cleaned, topics, evt);
@@ -637,7 +629,7 @@ void obsidianSyncAll() {
     String slug = stored.length() ? stored : pickVaultStem(num, title);
     String md = buildNoteMarkdown(num, slug, transcript, cleaned, title, summary, topics, userTag, createdUtc, evt);
     String fname = slug + ".md";
-    String path = configGetGHDir() + "/" + fname;
+    String path = cfg::githubDir() + "/" + fname;
 
     GhResult r = GH_NET;
     for (int attempt = 0; attempt < 3 && WiFi.status() == WL_CONNECTED; attempt++) {
@@ -649,7 +641,6 @@ void obsidianSyncAll() {
       freezeVaultMeta(num, slug, title);
       markNoteObsidianPushed(num, true);
       done++; pushedAny = true;
-      // Track dirty tags — only rebuild MOCs for these
       bool seen = false;
       for (size_t j = 0; j < dirtyTags.size(); j++)
         if (dirtyTags[j] == userTag) { seen = true; break; }
@@ -661,7 +652,6 @@ void obsidianSyncAll() {
     }
   }
 
-  // Rebuild MOCs only for tags that had new notes this run (was: all tags every time)
   if (pushedAny) {
     for (size_t t = 0; t < dirtyTags.size(); t++) {
       if (WiFi.status() != WL_CONNECTED) break;
