@@ -80,40 +80,9 @@
 #define BAT_LOW_THRESHOLD      15
 #define BAT_RECOVER_THRESHOLD  20
 
-// ---------------------------------------------------------------------------
-// Timezone  ─  POSIX TZ string
-// ---------------------------------------------------------------------------
-// The device syncs NTP to UTC, stores UTC in the RTC chip, and then uses
-// this string to convert to local time wherever getLocalTime() is called
-// (display clock, note timestamps, AI-enriched calendar events).
-//
-// HOW TO CHANGE YOUR TIMEZONE
-// ---------------------------
-// Replace the string below with the POSIX TZ value for your location.
-// The format is:  StdOffset[DstOffset,start,end]
-//   Std    = standard-time abbreviation  (e.g. PST, MST, CST, EST)
-//   Offset = hours WEST of UTC (positive = west, e.g. PST = UTC-8 so 8)
-//   Dst    = daylight-saving abbreviation (e.g. PDT)
-//   start  = when DST begins  (Mx.y.z = month x, week y, day z)
-//   end    = when DST ends
-//
-// Common US zones:
-//   US Pacific   "PST8PDT,M3.2.0,M11.1.0"   (UTC-8 / UTC-7 in summer)  ← current
-//   US Mountain  "MST7MDT,M3.2.0,M11.1.0"   (UTC-7 / UTC-6 in summer)
-//   US Central   "CST6CDT,M3.2.0,M11.1.0"   (UTC-6 / UTC-5 in summer)
-//   US Eastern   "EST5EDT,M3.2.0,M11.1.0"   (UTC-5 / UTC-4 in summer)
-//
-// Other zones:
-//   UTC / no DST "UTC0"
-//   Germany      "CET-1CEST,M3.5.0,M10.5.0/3"  (UTC+1 / UTC+2 in summer)
-//   UK / Ireland "GMT0BST,M3.5.0/1,M10.5.0"    (UTC+0 / UTC+1 in summer)
-//
-// Full POSIX TZ database: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-// ---------------------------------------------------------------------------
-#define DEVICE_TZ_POSIX  "PST8PDT,M3.2.0,M11.1.0"   // US Pacific (UTC-8 / UTC-7 DST)
-
-/* Firmware version */
-#define FIRMWARE_VERSION  "v1.0"
-#define FW_VERSION        "v1.0"
+/* Time & firmware */
+#define LOCAL_TIME_OFFSET_MIN  120   // UTC+2 (Germany summer). Set to your offset.
+#define FIRMWARE_VERSION       "v1.0"
+#define FW_VERSION             "v1.0"
 
 #endif // CONFIG_H
