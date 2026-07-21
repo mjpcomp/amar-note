@@ -9,11 +9,11 @@ Hold a button, talk, let go. A few seconds later a tidy Markdown note — with a
 ## ✨ What it does
 
 - **One-button voice capture** on a tiny e-ink device — no screen-tapping, no phone.
-- **On-device transcription** via OpenAI Whisper.
+- **On-device transcription** via OpenAI Whisper or **Groq Whisper (free tier)**.
 - **AI note cleanup (the headline upgrade):** a language model rewrites your messy, filler-filled speech into **coherent, succinct prose**, generates a **title**, a **one-sentence summary**, and **topic links** — automatically, every time you sync.
 - **Verbatim safety net:** the original raw transcript is tucked into a foldable callout, so nothing you said is ever lost.
 - **Syncs to GitHub** as clean Markdown with YAML frontmatter and tags — drop it into **Obsidian** and your notes organise themselves.
-- **No app, no account lock-in, no cloud middleman** — it talks directly to OpenAI and to *your* GitHub repo.
+- **No app, no account lock-in, no cloud middleman** — it talks directly to your chosen STT provider and to *your* GitHub repo.
 
 ---
 
@@ -39,7 +39,7 @@ Credit where it's due — the original firmware already provided: voice **record
 | 📶 **Runtime provisioning** | ➕ New | Wi-Fi hotspot + captive portal for on-device NVS storage of credentials. |
 | 🔒 **Real TLS validation** | 🔁 Changed | HTTPS validates against the Mozilla CA bundle. |
 | 🔄 **OTA updates** | ➕ New | Firmware updates over the air from the portal (`/ota`). |
-| 🐛 **Chunked-HTTP fix** | ➕ New | HTTPS client now decodes `Transfer-Encoding: chunked` responses. |
+| 🐛 **Chunked-HTTP decode fix** | 🔁 Changed | HTTPS client now decodes `Transfer-Encoding: chunked` responses. |
 | 📊 **Snappier level meter** | 🔁 Changed | VU meter refresh ~2 Hz → ~10 Hz, plus async e-paper refresh. |
 | 🔐 **Zero secrets in code** | 🔁 Changed | Wi-Fi and API keys live on-device, not in the repo. |
 | 🏷️ **Title-named files** | 🔁 Changed | Notes saved under their one-word topic (`Soho.md`) instead of `note_001.md`. |
@@ -51,9 +51,14 @@ Credit where it's due — the original firmware already provided: voice **record
 
 | Upgrade | Type | What changed |
 |---|---|---|
-| 🎨 **Rebrand** | 🔁 Changed | All user-facing strings, portal pages, hotspot name, boot banner, and sleep-screen logo updated to Amar Note. |
-| 🔘 **Button UX redesign** | 🔁 Changed | Two-button state machine rebuilt for instant tap-to-record; long-press/nav model simplified. |
-| 🖥️ **Display speed tuning** | 🔁 Changed | Full refresh now only on boot/wake; all normal navigation uses strict partial refresh. |
+| 🎨 **Rebrand** | 🔁 Changed | All user-facing strings, portal pages, hotspot name (`AmarNote-Setup`), boot banner, and sleep-screen logo updated to Amar Note. |
+| 🎤 **Groq STT (free tier)** | ➕ New | Optional Groq `whisper-large-v3-turbo` transcription — no credit card needed. Switch providers in the portal. |
+| 🗂️ **Portal provider links** | ➕ New | Setup page now shows direct links to OpenAI, Groq, and GitHub PAT pages. |
+| ⏱️ **POSIX timezone** | 🔁 Changed | Replaced the vestigial `LOCAL_TIME_OFFSET_MIN` constant with a proper DST-aware POSIX TZ string (`DEVICE_TZ_POSIX`). Note timestamps and calendar events now reflect real local time. |
+| 🔌 **Correct hardware pins** | 🔁 Changed | All EPD SPI, I2C, power-control, and button pins corrected to the official Waveshare ESP32-S3-ePaper-1.54 definitions. |
+| 📡 **HTTPS chunked read fix** | 🔁 Changed | HTTP client reads in 512-byte chunks instead of single bytes — eliminates timeout drops on slow connections. |
+| 🏷️ **Dirty-tag MOC rebuild** | 🔁 Changed | Tag index (`_MOC`) files are only rewritten when their tag set actually changes, not on every sync. |
+| 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
 
 ---
 
@@ -79,10 +84,11 @@ The printable enclosure is the original creator's hardware design — download f
 
 ## 📋 What you'll need
 
-1. Assembled Pala Note hardware + USB-C cable.
-2. An **OpenAI API key** — <https://platform.openai.com/api-keys>.
-3. A **GitHub repo** for notes + a fine-grained PAT with **Contents: Read and write**.
-4. Your **2.4 GHz Wi-Fi** name + password.
+1. Assembled Waveshare ESP32-S3 1.54″ e-Paper board + USB-C cable.
+2. An **OpenAI API key** (for AI enrichment) — <https://platform.openai.com/api-keys>.
+3. *(Optional)* A **Groq API key** (free, for Whisper transcription) — <https://console.groq.com/keys>.
+4. A **GitHub repo** for notes + a fine-grained PAT with **Contents: Read and write** — <https://github.com/settings/tokens>.
+5. Your **2.4 GHz Wi-Fi** name + password.
 
 ---
 
@@ -145,8 +151,9 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
 1. Power on. With no Wi-Fi stored, device broadcasts **`AmarNote-Setup`**.
 2. Connect phone/laptop to `AmarNote-Setup`.
 3. Open browser to **`http://192.168.4.1`**.
-4. Fill in Wi-Fi, OpenAI key, GitHub repo/token, vault folder, enable sync + AI.
-5. Tap Save. Device reboots onto your Wi-Fi.
+4. Fill in Wi-Fi credentials, OpenAI key, GitHub repo/token, vault folder.
+5. *(Optional)* Enter a **Groq API key** and set **STT Provider** to **Groq** for free Whisper transcription.
+6. Enable sync and AI enrichment. Tap **Save**. Device reboots onto your Wi-Fi.
 
 ---
 
@@ -166,9 +173,9 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
 
 ## 🤖 How the AI pipeline works
 
-1. **Transcribes** audio with **Whisper** (`whisper-1`).
+1. **Transcribes** audio with **Whisper** — either OpenAI (`whisper-1`) or Groq (`whisper-large-v3-turbo`, free tier). Set your preference in the portal.
 2. **Enriches** with **`gpt-4o-mini`**: topic title, summary, cleaned body, tags, calendar event.
-3. **Writes Markdown** and **pushes** to your GitHub repo.
+3. **Writes Markdown** and **pushes** to your GitHub repo. Only tag index files whose tag set changed are rewritten.
 
 Example output:
 ```markdown
@@ -201,8 +208,10 @@ I'm heading to Soho House tomorrow at seven...
 
 ## ⚙️ Configuration reference
 
-All runtime config lives in NVS (namespace `forrest`) and is set via the portal — never in code:
-`WIFI_SSID`, `WIFI_PASS`, `OPENAI_KEY`, `repo`, `branch`, `dir`, `token`, `enabled`, `ai-enrich`.
+All runtime config lives in NVS (namespace **`amar`**) and is set via the portal — never in code:
+`WIFI_SSID`, `WIFI_PASS`, `OPENAI_KEY`, `GROQ_KEY`, `STT_PROVIDER` (0 = OpenAI, 1 = Groq), `repo`, `branch`, `dir`, `token`, `enabled`, `ai-enrich`.
+
+Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default is US Pacific (`PST8PDT,M3.2.0,M11.1.0`). Common alternatives are documented inline in `config.h`.
 
 ---
 
@@ -213,13 +222,17 @@ All runtime config lives in NVS (namespace `forrest`) and is set via the portal 
 - **Boot loop / PSRAM errors** → confirm **PSRAM = OPI** and **Flash Size = 8MB**.
 - **Notes sync but no AI summary** → check **AI titles + topic links** is ticked and your OpenAI key has billing/chat access.
 - **Wi-Fi won't connect** → ESP32-S3 is **2.4 GHz only**.
+- **Transcription fails after upgrading from Forrest Note** → NVS namespace changed (`forrest` → `amar`); do a full flash-erase (`esptool.py erase_flash`) before flashing, then re-provision via the portal.
+- **Groq transcription fails** → confirm your Groq key is saved and **STT Provider** is set to **Groq** in the portal. Groq's free tier has per-minute rate limits; if you hit them, switch back to OpenAI.
+- **Note timestamps show wrong timezone** → edit `DEVICE_TZ_POSIX` in `config.h` and reflash. Common zone strings are listed there.
 
 ---
 
 ## 🔒 Security & privacy
 
 - No secrets in this repo. Keys stored in on-device NVS.
-- Notes go only to OpenAI (transcription/cleanup) and your own GitHub repo.
+- Notes go only to your chosen STT provider (OpenAI or Groq) and your own GitHub repo.
+- AI enrichment uses OpenAI `gpt-4o-mini` only — this is not routed through Groq.
 
 ---
 
