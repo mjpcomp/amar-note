@@ -16,7 +16,6 @@
 #define EPD_RST_PIN   GPIO_NUM_9
 #define EPD_BUSY_PIN  GPIO_NUM_8
 
-
 /* Power control pins */
 #define EPD_PWR_PIN     GPIO_NUM_6
 #define Audio_PWR_PIN   GPIO_NUM_42
@@ -66,6 +65,12 @@
 #define TAG_FILE   "/notes/tags.txt"
 #define TOMBS_FILE "/notes/tombs.csv"   // pending vault deletes (uid,tag per line)
 #define MAX_TAGS   20
+
+/* NVS (Non-Volatile Storage) namespace — all runtime config keys live here */
+#define NVS_NAMESPACE  "forrest"
+
+/* SoftAP setup portal SSID — shown when device has no Wi-Fi credentials */
+#define SETUP_SSID     "AmarNote-Setup"
 
 /* UI timing */
 #define REC_HOLD_MS         350
