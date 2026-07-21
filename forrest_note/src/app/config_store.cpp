@@ -5,7 +5,7 @@
 
 // ============================================================
 // config_store — Amar Note NVS-backed settings
-// All keys live in the NVS namespace defined by NVS_NAMESPACE ("forrest").
+// All keys live in the NVS namespace defined by NVS_NAMESPACE ("amar").
 // ============================================================
 
 static Preferences prefs;

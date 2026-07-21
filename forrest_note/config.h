@@ -67,7 +67,7 @@
 #define MAX_TAGS   20
 
 /* NVS (Non-Volatile Storage) namespace — all runtime config keys live here */
-#define NVS_NAMESPACE  "forrest"
+#define NVS_NAMESPACE  "amar"
 
 /* SoftAP setup portal SSID — shown when device has no Wi-Fi credentials */
 #define SETUP_SSID     "AmarNote-Setup"
@@ -86,7 +86,7 @@
 #define BAT_RECOVER_THRESHOLD  20
 
 // ---------------------------------------------------------------------------
-// Timezone  ─  POSIX TZ string
+// Timezone  —  POSIX TZ string
 // ---------------------------------------------------------------------------
 // The device syncs NTP to UTC, stores UTC in the RTC chip, and then uses
 // this string to convert to local time wherever getLocalTime() is called

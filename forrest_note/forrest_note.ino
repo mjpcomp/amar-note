@@ -34,10 +34,10 @@ void setup() {
     buttonsInit();
     sdInit();
 
-    bool apOk = WiFi.softAP("AmarNote-Setup");
+    bool apOk = WiFi.softAP(SETUP_SSID);
     IPAddress apIP = WiFi.softAPIP();
     Serial.printf("[setup] AP %s IP %s\n",
-                  "AmarNote-Setup", apIP.toString().c_str());
+                  SETUP_SSID, apIP.toString().c_str());
 
     networkInit();
     uiInit();
