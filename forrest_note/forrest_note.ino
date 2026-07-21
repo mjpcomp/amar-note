@@ -108,9 +108,9 @@ void startRecordFlow() {
   state = STATE_RECORDING;
   showRecording();
 
-  palaSoundSetEnabled(false);
+  amarSoundSetEnabled(false);
   bool recOk = record();
-  palaSoundSetEnabled(true);
+  amarSoundSetEnabled(true);
 
   if (!recOk) {
     showError("REC FAIL");
@@ -492,7 +492,7 @@ void loop() {
     } else if (rec == EV_SINGLE) {
       soundSelect();
       if (settingsCursor == 0) {
-        palaSoundSetEnabled(!palaSoundIsEnabled());
+        amarSoundSetEnabled(!amarSoundIsEnabled());
         showSettings(settingsCursor);
       } else if (settingsCursor == 1) {
         startTransferMode();
