@@ -1,75 +1,72 @@
 #include "Arduino.h"
 #include "../../config.h"
 #include "../../globals.h"
-#include "../../types.h"
 #include "buttons.h"
+#include "ui.h"
+#include "record.h"
 
-extern void startRecordFlow();
-extern void resetActivity();
+// ============================================================
+// Buttons — Amar Note two-button state machine
+//
+// BTN_REC (GPIO0/BOOT):
+//   tap          → start/stop recording from anywhere (instant, no hold)
+//   long-press   → select / open item
+//
+// BTN_PWR (GPIO18):
+//   tap          → scroll / navigate
+//   long-press   → back / up
+//   very-long    → sleep
+// ============================================================
 
-bool isDown(int pin) { return digitalRead(pin) == LOW; }
+static uint32_t recDownMs  = 0;
+static uint32_t pwrDownMs  = 0;
+static bool     recWasDown = false;
+static bool     pwrWasDown = false;
+static bool     recLongFired = false;
+static bool     pwrLongFired = false;
 
-// Non-blocking per-button state machine, sampled once per loop (no busy-wait).
-// Emits:
-//   EV_SINGLE  on release, if held < BTN_LONG_MS  (acts the instant you let go)
-//   EV_LONG    the moment the hold crosses BTN_LONG_MS (fires once, no wait-for-release)
-// Double-press was removed: it forced every tap to wait ~200 ms for a possible second
-// press, which is what made the UI feel laggy.
-namespace {
-  enum Phase { PH_IDLE, PH_DEBOUNCE, PH_DOWN, PH_LONGFIRED };
-  struct BtnState { Phase phase; uint32_t tDown; };
-  BtnState st[2] = {{PH_IDLE, 0}, {PH_IDLE, 0}};
-  inline int idx(int pin) { return pin == BTN_REC ? 0 : 1; }
+void buttonsInit() {
+    pinMode(BTN_REC, INPUT_PULLUP);
+    pinMode(BTN_PWR, INPUT_PULLUP);
 }
 
-ButtonEvent readButtonEvent(int pin) {
-  BtnState& b = st[idx(pin)];
-  bool down = isDown(pin);
-  uint32_t now = millis();
+void buttonsService() {
+    const uint32_t now = millis();
+    const bool recDown = (digitalRead(BTN_REC) == LOW);
+    const bool pwrDown = (digitalRead(BTN_PWR) == LOW);
 
-  switch (b.phase) {
-    case PH_IDLE:
-      if (down) { b.phase = PH_DEBOUNCE; b.tDown = now; }
-      return EV_NONE;
+    // --- BTN_REC ---
+    if (recDown && !recWasDown) {
+        recDownMs    = now;
+        recLongFired = false;
+    }
+    if (recDown && !recLongFired && (now - recDownMs) >= BTN_LONG_MS) {
+        recLongFired = true;
+        uiOnRecLong();
+    }
+    if (!recDown && recWasDown) {
+        if (!recLongFired) {
+            uiOnRecTap();   // instant tap — start or stop recording
+        }
+    }
+    recWasDown = recDown;
 
-    case PH_DEBOUNCE:
-      if (!down) { b.phase = PH_IDLE; return EV_NONE; }      // bounce / too brief
-      if (now - b.tDown >= BTN_DEBOUNCE_MS) b.phase = PH_DOWN;
-      return EV_NONE;
-
-    case PH_DOWN:
-      if (now - b.tDown >= BTN_LONG_MS) {                    // crossed the long threshold
-        b.phase = PH_LONGFIRED;
-        resetActivity();
-        return EV_LONG;
-      }
-      if (!down) {                                           // released as a tap
-        b.phase = PH_IDLE;
-        resetActivity();
-        return EV_SINGLE;
-      }
-      return EV_NONE;
-
-    case PH_LONGFIRED:                                       // long already fired; await release
-      if (!down) b.phase = PH_IDLE;
-      return EV_NONE;
-  }
-  return EV_NONE;
-}
-
-// Non-blocking hold-to-record in IDLE: tracks the press across loop iterations and
-// fires startRecordFlow() once the hold reaches REC_HOLD_MS.
-bool handleIdleRec() {
-  static bool tracking = false;
-  static uint32_t t0 = 0;
-
-  if (!isDown(BTN_REC)) { tracking = false; return false; }
-
-  uint32_t now = millis();
-  if (!tracking) { tracking = true; t0 = now; resetActivity(); return true; }
-  if (now - t0 >= REC_HOLD_MS) {
-    tracking = false;
-    startRecordFlow();
-  }
-  return true;   // consume the press while it's held
+    // --- BTN_PWR ---
+    if (pwrDown && !pwrWasDown) {
+        pwrDownMs    = now;
+        pwrLongFired = false;
+    }
+    if (pwrDown && !pwrLongFired && (now - pwrDownMs) >= BTN_LONG_MS) {
+        pwrLongFired = true;
+        uiOnPwrLong();
+    }
+    if (pwrDown && !pwrLongFired && (now - pwrDownMs) >= BTN_VLONG_MS) {
+        // very-long already consumed by long handler; sleep handled inside uiOnPwrLong
+    }
+    if (!pwrDown && pwrWasDown) {
+        if (!pwrLongFired) {
+            uiOnPwrTap();   // scroll / navigate
+        }
+    }
+    pwrWasDown = pwrDown;
 }
