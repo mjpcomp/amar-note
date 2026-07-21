@@ -1,110 +1,182 @@
 #include "Arduino.h"
 #include "../../config.h"
 #include "../../globals.h"
+#include "../../types.h"
 #include "record.h"
+#include "SD_MMC.h"
+#include "esp_heap_caps.h"
+#include "notes.h"
 #include "ui.h"
-#include "network.h"
-#include "driver/i2s_std.h"
+#include "../../sounds.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/ringbuf.h"
 
-// ============================================================
-// Record — Amar Note audio capture
-// ============================================================
-
-static i2s_chan_handle_t rxHandle = nullptr;
-static bool             recording = false;
-static File             recFile;
-static uint32_t         recStartMs = 0;
-static uint32_t         recBytes   = 0;
-
-static const uint32_t BUF_BYTES = (SAMPLE_RATE / 1000) * RECORD_BUF_MS * 2;
-
-void recordInit() {
-    i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(
-        I2S_NUM_0, I2S_ROLE_MASTER);
-    i2s_new_channel(&chanCfg, nullptr, &rxHandle);
-
-    i2s_std_config_t stdCfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(
-                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = (gpio_num_t)I2S_BCK,
-            .ws   = (gpio_num_t)I2S_WS,
-            .dout = I2S_GPIO_UNUSED,
-            .din  = (gpio_num_t)I2S_DI,
-            .invert_flags = { .mclk_inv=false, .bclk_inv=false, .ws_inv=false },
-        },
-    };
-    i2s_channel_init_std_mode(rxHandle, &stdCfg);
-    i2s_channel_enable(rxHandle);
+extern "C" {
+#include "../../src/audio/audio_bsp.h"
 }
 
-bool recordIsActive() { return recording; }
+// Amar Note — audio capture (producer) and SD-write (consumer) run on separate
+// cores connected by a PSRAM ring buffer. The producer keeps draining the I2S
+// DMA at line rate so a slow SD write only grows the ring instead of dropping samples.
+struct RecCtx {
+  RingbufHandle_t   ring;
+  volatile bool     running;    // consumer -> producer: keep capturing
+  volatile bool     finished;   // producer -> consumer: capture loop exited
+};
 
-void recordStart() {
-    if (recording) return;
-    char path[64];
-    snprintf(path, sizeof(path), "/rec_%lu.wav", (unsigned long)millis());
-    recFile = SD_MMC.open(path, FILE_WRITE);
-    if (!recFile) {
-        Serial.println("[record] failed to open file");
-        return;
+static void recProducerTask(void* arg) {
+  RecCtx* ctx = (RecCtx*)arg;
+  int16_t* sbuf = (int16_t*)heap_caps_malloc(REC_BUF,   MALLOC_CAP_8BIT);
+  int16_t* mbuf = (int16_t*)heap_caps_malloc(REC_BUF/2, MALLOC_CAP_8BIT);
+  const int monoSamples = REC_BUF / 4;   // stereo int16 in -> mono int16 out
+
+  if (sbuf && mbuf) {
+    while (ctx->running) {
+      audio_playback_read((void*)sbuf, REC_BUF);   // blocking read from codec DMA
+      for (int i = 0; i < monoSamples; i++) mbuf[i] = sbuf[i * 2];  // left channel
+      // Block briefly if the ring is full (SD catching up); never silently drop.
+      xRingbufferSend(ctx->ring, mbuf, monoSamples * 2, pdMS_TO_TICKS(1000));
     }
-    // Reserve WAV header space
-    uint8_t hdr[44] = {};
-    recFile.write(hdr, 44);
-    recBytes   = 0;
-    recStartMs = millis();
-    recording  = true;
-    uiOnRecordStart();
-    Serial.println("[record] started");
+  }
+
+  if (sbuf) heap_caps_free(sbuf);
+  if (mbuf) heap_caps_free(mbuf);
+  ctx->finished = true;
+  vTaskDelete(NULL);
 }
 
-void recordStop() {
-    if (!recording) return;
-    recording = false;
+bool record() {
+  int num = nextNoteNumber();
+  char path[64]; snprintf(path, sizeof(path), "%s/note_%03d.wav", NOTES_DIR, num);
+  Serial.printf("[Rec] %s\n", path);
 
-    // Patch WAV header
-    uint32_t dataSize   = recBytes;
-    uint32_t riffSize   = dataSize + 36;
-    uint32_t sampleRate = SAMPLE_RATE;
-    uint32_t byteRate   = SAMPLE_RATE * 2;
-    uint16_t blockAlign = 2;
-    uint16_t bitsPerSample = 16;
-    recFile.seek(0);
-    recFile.write((uint8_t*)"RIFF", 4);
-    recFile.write((uint8_t*)&riffSize, 4);
-    recFile.write((uint8_t*)"WAVEfmt ", 8);
-    uint32_t fmtSize = 16; recFile.write((uint8_t*)&fmtSize, 4);
-    uint16_t audioFmt = 1; recFile.write((uint8_t*)&audioFmt, 2);
-    uint16_t numCh = 1;    recFile.write((uint8_t*)&numCh, 2);
-    recFile.write((uint8_t*)&sampleRate, 4);
-    recFile.write((uint8_t*)&byteRate, 4);
-    recFile.write((uint8_t*)&blockAlign, 2);
-    recFile.write((uint8_t*)&bitsPerSample, 2);
-    recFile.write((uint8_t*)"data", 4);
-    recFile.write((uint8_t*)&dataSize, 4);
-    recFile.close();
+  File f = SD_MMC.open(path, FILE_WRITE);
+  if (!f) return false;
 
-    uiOnRecordStop();
-    networkEnqueueTranscribe(recFile.name());
-    Serial.printf("[record] stopped, %lu bytes, queued for transcription\n",
-                  (unsigned long)recBytes);
+  uint8_t header[44]={}; f.write(header, 44);
+
+  RecCtx ctx;
+  ctx.ring = xRingbufferCreateWithCaps(REC_RING_LEN, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM);
+  if (!ctx.ring) { f.close(); return false; }
+  ctx.running  = true;
+  ctx.finished = false;
+
+  TaskHandle_t producer = NULL;
+  if (xTaskCreatePinnedToCore(recProducerTask, "recprod", 4096, &ctx, 6, &producer, 0) != pdPASS) {
+    vRingbufferDeleteWithCaps(ctx.ring);
+    f.close();
+    return false;
+  }
+
+  uint32_t totalMono = 0, t0 = millis();
+  int      recPeak = 0;   // peak |sample| since the last UI update
+
+  auto drain = [&](TickType_t wait) -> bool {
+    size_t got = 0;
+    void* item = xRingbufferReceive(ctx.ring, &got, wait);
+    if (!item) return false;
+    int16_t* sp = (int16_t*)item;
+    int ns = got / 2;
+    for (int i = 0; i < ns; i++) { int a = abs(sp[i]); if (a > recPeak) recPeak = a; }
+    size_t written = f.write((uint8_t*)item, got);
+    vRingbufferReturnItem(ctx.ring, item);
+    totalMono += written;
+    return true;
+  };
+
+  uint32_t lastUi = 0;
+  while ((digitalRead(BTN_REC) == LOW || millis() - t0 < 500) &&
+         (millis() - t0 < MAX_REC_MS)) {
+    drain(pdMS_TO_TICKS(40));
+    uint32_t now = millis();
+    if (now - lastUi >= 100) {
+      lastUi = now;
+      int lvl = (int)((long)recPeak * 152L * 3L / 32767L);
+      if (lvl > 152) lvl = 152;
+      showRecordingLive(now - t0, lvl);
+      recPeak = 0;
+    }
+  }
+
+  ctx.running = false;
+  while (!ctx.finished) drain(pdMS_TO_TICKS(50));
+  while (drain(0)) { /* final drain */ }
+
+  vRingbufferDeleteWithCaps(ctx.ring);
+
+  f.seek(0);
+  uint32_t dB=totalMono, fS=dB+36, bR=SAMPLE_RATE*2;
+  uint16_t bA=2,aF=1,ch=1,bps=16; uint32_t fL=16,sr=SAMPLE_RATE;
+  f.write((uint8_t*)"RIFF",4); f.write((uint8_t*)&fS,4);
+  f.write((uint8_t*)"WAVE",4); f.write((uint8_t*)"fmt ",4);
+  f.write((uint8_t*)&fL,4);   f.write((uint8_t*)&aF,2);
+  f.write((uint8_t*)&ch,2);   f.write((uint8_t*)&sr,4);
+  f.write((uint8_t*)&bR,4);   f.write((uint8_t*)&bA,2);
+  f.write((uint8_t*)&bps,2);
+  f.write((uint8_t*)"data",4); f.write((uint8_t*)&dB,4);
+  f.close();
+
+  lastRecNum = num;
+  Serial.printf("[Rec] done: %lu bytes\n", (unsigned long)totalMono);
+  return totalMono > 1000;
 }
 
-void recordService() {
-    if (!recording) return;
-    if ((millis() - recStartMs) >= (uint32_t)RECORD_MAX_S * 1000) {
-        Serial.println("[record] max duration reached, stopping");
-        recordStop();
-        return;
+bool playWavFile(const char* path) {
+  File f = SD_MMC.open(path);
+  if (!f) return false;
+  if (f.size() <= 44) { f.close(); return false; }
+
+  f.seek(44);
+
+  const int monoBytes = 1024;
+  uint8_t* monoBuf   = (uint8_t*)heap_caps_malloc(monoBytes,     MALLOC_CAP_8BIT);
+  int16_t* stereoBuf = (int16_t*)heap_caps_malloc(monoBytes * 2, MALLOC_CAP_8BIT);
+
+  if (!monoBuf || !stereoBuf) {
+    if (monoBuf)   heap_caps_free(monoBuf);
+    if (stereoBuf) heap_caps_free(stereoBuf);
+    f.close();
+    return false;
+  }
+
+  audioPlaying  = true;
+  stopPlayback  = false;
+
+  palaSoundSetEnabled(false);
+  audio_playback_set_vol(85);
+
+  while (f.available() && !stopPlayback) {
+    int readBytes = f.read(monoBuf, monoBytes);
+    if (readBytes <= 0) break;
+    if (readBytes & 1) readBytes--;
+
+    int samples = readBytes / 2;
+    int16_t* mono = (int16_t*)monoBuf;
+    for (int i = 0; i < samples; i++) {
+      int16_t s = mono[i];
+      stereoBuf[i * 2 + 0] = s;
+      stereoBuf[i * 2 + 1] = s;
     }
-    static uint8_t buf[4096];
-    size_t bytesRead = 0;
-    i2s_channel_read(rxHandle, buf, BUF_BYTES, &bytesRead, pdMS_TO_TICKS(10));
-    if (bytesRead > 0) {
-        recFile.write(buf, bytesRead);
-        recBytes += bytesRead;
+    audio_playback_write((void*)stereoBuf, (uint32_t)(samples * 2 * sizeof(int16_t)));
+
+    if (digitalRead(BTN_REC) == LOW) {
+      delay(20);
+      if (digitalRead(BTN_REC) == LOW) {
+        while (digitalRead(BTN_REC) == LOW) delay(5);
+        stopPlayback = true;
+      }
     }
+  }
+
+  audio_playback_set_vol(0);
+  palaSoundSetEnabled(true);
+
+  heap_caps_free(monoBuf);
+  heap_caps_free(stereoBuf);
+  f.close();
+
+  audioPlaying = false;
+  stopPlayback = false;
+  return true;
 }
