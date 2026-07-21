@@ -1,304 +1,599 @@
 #include "Arduino.h"
 #include "../../config.h"
 #include "../../globals.h"
+#include "../../types.h"
 #include "network.h"
-#include "config_store.h"
+#include "notes.h"
+#include "rtc.h"
 #include "ui.h"
-#include "record.h"
+#include "config_store.h"
 #include "WiFi.h"
-#include "WebServer.h"
-#include "HTTPClient.h"
 #include "WiFiClientSecure.h"
-#include "ArduinoJson.h"
+#include <WebServer.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
 #include "SD_MMC.h"
-#include "esp_ota_ops.h"
-#include "esp_https_ota.h"
-#include "mbedtls/ssl.h"
+#include "esp_heap_caps.h"
+#include "../../secrets.h"
 
-// ============================================================
-// network.cpp — Amar Note Wi-Fi, captive portal, OTA
-// ============================================================
-// NOTE: Voice transcription (Whisper / Groq) now lives entirely in
-// obsidian.cpp which owns the note-sync pipeline. The old dead-code
-// whisperTranscribe / networkDrainQueue path has been removed.
-// ============================================================
+// IDF built-in Mozilla CA root bundle (libmbedtls.a). Auto-maintained with the
+// esp32 core, so server certs validate without shipping/rotating a pinned PEM.
+extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
+extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
-static WebServer server(80);
-static bool      wifiConnected = false;
+static bool transcribeOnce(const String& wavPath, int noteNum) {
+  String oaiKey = cfg::openaiKey();
+  if (oaiKey.length() == 0) { Serial.println("[Whisper] no API key set"); return false; }
 
-// --- Mozilla CA bundle ---
-extern const uint8_t mozilla_ca_bundle[] asm("_binary_ca_bundle_pem_start");
-extern const uint8_t mozilla_ca_bundle_end[] asm("_binary_ca_bundle_pem_end");
+  File f = SD_MMC.open(wavPath.c_str());
+  if (!f) return false;
+  size_t fileSize = f.size();
 
-// ---- Helpers ----
+  String bnd = "----PalaBoundary";
+  String pre = "--" + bnd + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n"
+               "--" + bnd + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"note.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
+  String post = "\r\n--" + bnd + "--\r\n";
+  size_t totalLen = pre.length() + fileSize + post.length();
 
-static String htmlEscape(const String& s) {
-    String out;
-    out.reserve(s.length());
-    for (char c : s) {
-        if      (c == '&')  out += "&amp;";
-        else if (c == '<')  out += "&lt;";
-        else if (c == '>')  out += "&gt;";
-        else if (c == '"')  out += "&quot;";
-        else                out += c;
+  WiFiClientSecure client;
+  client.setCACertBundle(x509_crt_bundle_start,
+                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+  client.setHandshakeTimeout(15);
+
+  if (!client.connect("api.openai.com", 443, 15000)) { f.close(); return false; }
+
+  client.printf("POST /v1/audio/transcriptions HTTP/1.1\r\n"
+                "Host: api.openai.com\r\n"
+                "Authorization: Bearer %s\r\n"
+                "Content-Type: multipart/form-data; boundary=%s\r\n"
+                "Content-Length: %u\r\n"
+                "Connection: close\r\n\r\n",
+                oaiKey.c_str(), bnd.c_str(), (unsigned)totalLen);
+  client.print(pre);
+
+  uint8_t* chunk = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_8BIT);
+  if (!chunk) { f.close(); client.stop(); return false; }
+  while (f.available()) {
+    int n = f.read(chunk, 4096);
+    if (n <= 0) break;
+    client.write(chunk, n);
+  }
+  heap_caps_free(chunk);
+  f.close();
+  client.print(post);
+
+  uint32_t deadline = millis() + 90000;
+  while (!client.available() && millis() < deadline) delay(20);
+
+  String resp = "";
+  bool inBody = false;
+  while (client.available() || (client.connected() && millis() < deadline)) {
+    if (!client.available()) { delay(10); continue; }
+    String line = client.readStringUntil('\n');
+    if (!inBody) {
+      if (line == "\r" || line == "") inBody = true;
+      if (line.startsWith("HTTP/") && line.indexOf(" 200 ") < 0) {
+        Serial.printf("[Whisper] %s\n", line.c_str());
+        client.stop(); return false;
+      }
+    } else {
+      resp += line;
+      if (resp.length() > 131072) break;
     }
-    return out;
+  }
+  client.stop();
+
+  DynamicJsonDocument doc(resp.length() + 1024);
+  DeserializationError jerr = deserializeJson(doc, resp);
+  if (jerr) { Serial.printf("[Whisper] json: %s\n", jerr.c_str()); return false; }
+  String text = doc["text"] | "";
+  if (text.length() == 0) { Serial.println("[Whisper] empty response"); return false; }
+
+  String tp = wavPath; tp.replace(".wav", ".txt");
+  File tf = SD_MMC.open(tp.c_str(), FILE_WRITE);
+  if (tf) { tf.print(text); tf.close(); }
+
+  updateIndexHasText(noteNum);
+  return true;
 }
 
-static String base64Encode(const uint8_t* data, size_t len) {
-    static const char* b64 =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    String out;
-    out.reserve(((len + 2) / 3) * 4);
-    for (size_t i = 0; i < len; i += 3) {
-        uint32_t v = ((uint32_t)data[i] << 16)
-                   | (i+1 < len ? (uint32_t)data[i+1] << 8 : 0)
-                   | (i+2 < len ? (uint32_t)data[i+2]      : 0);
-        out += b64[(v >> 18) & 0x3F];
-        out += b64[(v >> 12) & 0x3F];
-        out += (i+1 < len) ? b64[(v >>  6) & 0x3F] : '=';
-        out += (i+2 < len) ? b64[(v      ) & 0x3F] : '=';
+bool transcribe(const String& wavPath, int noteNum) {
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (transcribeOnce(wavPath, noteNum)) return true;
+    if (attempt < 2) { Serial.printf("[Whisper] retry %d/2\n", attempt + 1); delay(3000); }
+  }
+  return false;
+}
+
+void transcribeAll() {
+  if (!cfg::hasOpenAiKey()) { Serial.println("[Whisper] no API key; skipping sync"); return; }
+
+  int pending = 0;
+  for (int i=0; i<(int)noteIndex.size(); i++) if(!noteIndex[i].hasText) pending++;
+  int done = 0;
+  for (int i=0; i<(int)noteIndex.size(); i++) {
+    if (noteIndex[i].hasText) continue;
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.printf("[Whisper] wifi lost; %d note(s) stay pending\n", pending - done);
+      break;
     }
-    return out;
+    showTranscribing(done, pending);
+    char wp[64]; snprintf(wp, sizeof(wp), "%s/note_%03d.wav", NOTES_DIR, noteIndex[i].num);
+    if (transcribe(String(wp), noteIndex[i].num)) done++;
+  }
+  Serial.printf("[Whisper] synced %d/%d pending\n", done, pending);
 }
 
-// ---- Portal HTML ----
-
-static const char PORTAL_HTML[] PROGMEM = R"HTML(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Amar Note — Setup</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem 3rem;background:#f7f6f2;color:#28251d}
-h1{font-size:1.4rem;margin-bottom:.3rem}
-.tagline{font-size:.85rem;color:#7a7974;margin-bottom:1.8rem}
-/* sections */
-.section{background:#fff;border:1px solid #dcd9d5;border-radius:10px;padding:1.2rem 1.2rem 1rem;margin-bottom:1.2rem}
-.section-title{font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#7a7974;margin-bottom:.9rem}
-/* labels / inputs */
-label{display:block;font-size:.85rem;margin:.8rem 0 .2rem;font-weight:500}
-label span.opt{font-weight:400;color:#7a7974;margin-left:.3rem;font-size:.8rem}
-input[type=text],input[type=password],select{width:100%;padding:.5rem .6rem;
-  border:1px solid #d4d1ca;border-radius:6px;font-size:.95rem;background:#fff;color:#28251d}
-input:focus,select:focus{outline:2px solid #01696f;border-color:#01696f}
-/* help text */
-.help{font-size:.78rem;color:#7a7974;margin:.25rem 0 0;line-height:1.45}
-.help a{color:#01696f;text-decoration:none}
-.help a:hover{text-decoration:underline}
-/* checkbox rows */
-.cb{display:flex;align-items:center;gap:.5rem;margin:.7rem 0}
-.cb label{margin:0;font-weight:400}
-/* submit */
-.submit-wrap{margin-top:1.5rem}
-button[type=submit]{width:100%;padding:.75rem;background:#01696f;color:#fff;
-  border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer}
-button[type=submit]:hover{background:#0c4e54}
-.footer-note{font-size:.78rem;color:#7a7974;text-align:center;margin-top:.8rem}
-/* provider badge */
-.badge{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .45rem;
-  border-radius:4px;margin-left:.4rem;vertical-align:middle}
-.badge-free{background:#d4efdd;color:#1a6b38}
-.badge-paid{background:#fde8cc;color:#7a3a00}
-</style>
-</head>
-<body>
-<h1>&#127897; Amar Note &mdash; Setup</h1>
-<p class="tagline">Connect to your phone&rsquo;s Wi-Fi and configure your cloud services below.</p>
-
-<form method="POST" action="/provision">
-
-<!-- ── Wi-Fi ── -->
-<div class="section">
-  <div class="section-title">Wi-Fi</div>
-  <label>Network name (SSID)
-    <span class="opt">2.4 GHz only</span>
-  </label>
-  <input type="text" name="ssid" placeholder="Your Wi-Fi name" autocomplete="off">
-  <label>Password</label>
-  <input type="password" name="pass" placeholder="Leave blank to keep current" autocomplete="off">
-  <p class="help">Amar Note connects only to 2.4 GHz networks. 5 GHz SSIDs will not work.</p>
-</div>
-
-<!-- ── Speech-to-Text ── -->
-<div class="section">
-  <div class="section-title">Speech-to-Text (Transcription)</div>
-
-  <label>Provider</label>
-  <select name="stt_provider" id="stt_provider" onchange="onProviderChange()">
-    <option value="0">OpenAI Whisper <span class="badge badge-paid">Paid</span></option>
-    <option value="1">Groq Whisper &mdash; free tier <span class="badge badge-free">Free</span></option>
-  </select>
-  <p class="help" id="help_stt_openai">
-    OpenAI charges ~$0.006 per minute of audio.
-    <a href="https://platform.openai.com/signup" target="_blank" rel="noopener">Create an OpenAI account</a>,
-    then go to <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">API Keys</a>
-    to generate a key starting with <code>sk-</code>.
-  </p>
-  <p class="help" id="help_stt_groq" style="display:none">
-    Groq is <strong>free</strong> (up to 2 hrs of audio per day) and faster than OpenAI.
-    <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Create a free Groq account</a>
-    and generate a key starting with <code>gsk_</code>.
-  </p>
-
-  <div id="wrap_openai_key">
-    <label>OpenAI API key <span class="badge badge-paid">Paid</span></label>
-    <input type="text" name="openai" placeholder="sk-..." autocomplete="off">
-    <p class="help">
-      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>
-    </p>
-  </div>
-
-  <div id="wrap_groq_key" style="display:none">
-    <label>Groq API key <span class="badge badge-free">Free</span></label>
-    <input type="text" name="groq" placeholder="gsk_..." autocomplete="off">
-    <p class="help">
-      <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>
-      &mdash; Model used: <code>whisper-large-v3-turbo</code>
-    </p>
-  </div>
-
-  <div class="cb">
-    <input type="checkbox" name="ai_en" id="ai_en" checked>
-    <label for="ai_en">AI titles &amp; topic links (uses OpenAI GPT-4o-mini &mdash; separate from transcription)</label>
-  </div>
-  <p class="help">
-    AI enrichment always uses OpenAI regardless of the transcription provider.
-    If you&rsquo;re using Groq for transcription you still need an OpenAI key for this feature,
-    or uncheck it above.
-  </p>
-</div>
-
-<!-- ── GitHub ── -->
-<div class="section">
-  <div class="section-title">GitHub / Obsidian Vault Sync <span class="opt" style="text-transform:none;letter-spacing:0">(optional)</span></div>
-
-  <div class="cb">
-    <input type="checkbox" name="gh_en" id="gh_en" checked>
-    <label for="gh_en">Enable GitHub sync</label>
-  </div>
-
-  <p class="help">
-    Notes are pushed as Markdown files to a GitHub repo so Obsidian can read them.
-    You need a free GitHub account and a Personal Access Token (PAT) with
-    <strong>repo</strong> scope.
-    <a href="https://github.com/signup" target="_blank" rel="noopener">Create a GitHub account</a>
-    &mdash;
-    <a href="https://github.com/settings/tokens/new?description=AmarNote&scopes=repo" target="_blank" rel="noopener">Generate a PAT</a>
-    (select the <code>repo</code> checkbox, then copy the token starting with <code>github_pat_</code>).
-  </p>
-
-  <label>Repo <span class="opt">owner/name</span></label>
-  <input type="text" name="repo" placeholder="yourname/Notes" autocomplete="off">
-  <p class="help">Create a <strong>private</strong> repo first at
-    <a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>.
-  </p>
-
-  <label>Branch <span class="opt">default: main</span></label>
-  <input type="text" name="branch" placeholder="main">
-
-  <label>Vault folder <span class="opt">subfolder inside the repo</span></label>
-  <input type="text" name="dir" placeholder="VoiceNotes">
-
-  <label>GitHub Personal Access Token</label>
-  <input type="text" name="token" placeholder="github_pat_..." autocomplete="off">
-  <p class="help">
-    <a href="https://github.com/settings/tokens/new?description=AmarNote&scopes=repo" target="_blank" rel="noopener">github.com &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens</a>
-  </p>
-</div>
-
-<div class="submit-wrap">
-  <button type="submit">Save &amp; reboot</button>
-  <p class="footer-note">Amar Note will restart and connect using the saved settings. Leave any field blank to keep its current value.</p>
-</div>
-
-</form>
-
-<script>
-function onProviderChange() {
-  var v = document.getElementById('stt_provider').value;
-  var isGroq = v === '1';
-  document.getElementById('wrap_openai_key').style.display = isGroq ? 'none' : '';
-  document.getElementById('wrap_groq_key').style.display   = isGroq ? '' : 'none';
-  document.getElementById('help_stt_openai').style.display = isGroq ? 'none' : '';
-  document.getElementById('help_stt_groq').style.display   = isGroq ? '' : 'none';
-}
-</script>
-
-</body>
-</html>
-)HTML";
-
-// ---- Handlers ----
-
-static void handleRoot() {
-    server.send(200, "text/html", PORTAL_HTML);
+// ─── Portal helpers ────────────────────────────────────────────────────────────────────────────
+String htmlEscape(const String& s) {
+  String out = s;
+  out.replace("&", "&amp;"); out.replace("<", "&lt;");
+  out.replace(">", "&gt;"); out.replace("\"", "&quot;");
+  return out;
 }
 
-static void handleProvision() {
-    if (server.method() != HTTP_POST) { server.sendHeader("Location","/"); server.send(302); return; }
-
-    auto arg = [&](const char* k) -> String { return server.arg(k); };
-    if (arg("ssid").length())   configSetSSID(arg("ssid"));
-    if (arg("pass").length())   configSetPass(arg("pass"));
-    if (arg("openai").length()) configSetOpenAIKey(arg("openai"));
-    if (arg("groq").length())   configSetGroqKey(arg("groq"));
-    configSetSttProvider((uint8_t)arg("stt_provider").toInt());
-    if (arg("repo").length())   configSetGHRepo(arg("repo"));
-    if (arg("branch").length()) configSetGHBranch(arg("branch"));
-    if (arg("dir").length())    configSetGHDir(arg("dir"));
-    if (arg("token").length())  configSetGHToken(arg("token"));
-    configSetGHEnabled(server.hasArg("gh_en"));
-    configSetAIEnrich(server.hasArg("ai_en"));
-
-    server.send(200, "text/html",
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Saved</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:420px;margin:3rem auto;"
-        "padding:0 1rem;background:#f7f6f2;color:#28251d;text-align:center}"
-        "h2{color:#01696f}p{color:#7a7974;margin-top:.5rem}</style></head>"
-        "<body><h2>&#10003; Settings saved</h2>"
-        "<p>Amar Note is rebooting and will connect to your Wi-Fi&hellip;</p>"
-        "</body></html>");
-    delay(800);
-    ESP.restart();
+String readSmallFile(const char* path, size_t maxLen) {
+  File f = SD_MMC.open(path);
+  if (!f) return "";
+  String out;
+  while (f.available() && out.length() < maxLen) out += (char)f.read();
+  f.close();
+  return out;
 }
 
-// ---- Wi-Fi STA ----
-
-bool networkConnectWifi() {
-    String ssid = configGetSSID();
-    String pass = configGetPass();
-    if (!ssid.length()) return false;
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    uint32_t t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) delay(200);
-    wifiConnected = (WiFi.status() == WL_CONNECTED);
-    if (wifiConnected) Serial.printf("[net] WiFi connected: %s\n", WiFi.localIP().toString().c_str());
-    else               Serial.println("[net] WiFi connect failed");
-    return wifiConnected;
+String urlDecodeSimple(String s) {
+  s.replace("+", " ");
+  String out = "";
+  for (int i = 0; i < (int)s.length(); i++) {
+    if (s[i] == '%' && i + 2 < (int)s.length()) {
+      String hex = s.substring(i + 1, i + 3);
+      out += (char)strtol(hex.c_str(), nullptr, 16);
+      i += 2;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
 }
 
-// ---- SoftAP captive portal ----
-
-void networkStartPortal() {
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(SETUP_SSID);
-    server.on("/",          HTTP_GET,  handleRoot);
-    server.on("/provision", HTTP_POST, handleProvision);
-    server.onNotFound([](){ server.sendHeader("Location","/"); server.send(302); });
-    server.begin();
-    Serial.printf("[net] Portal started: SSID=%s IP=%s\n",
-                  SETUP_SSID, WiFi.softAPIP().toString().c_str());
+String portalCss() {
+  return String(
+    "<style>"
+    ":root{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;color:#111;background:#f3f0e9;}"
+    "body{margin:0;padding:24px;background:#f3f0e9;}"
+    ".wrap{max-width:780px;margin:0 auto;}"
+    ".top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;}"
+    "h1{font-size:44px;letter-spacing:-.06em;line-height:.9;margin:0;font-weight:800;}"
+    ".sub{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:#6a665f;margin-top:10px;}"
+    ".pill{display:inline-flex;border:1px solid #111;border-radius:999px;padding:8px 12px;font-size:13px;background:#fffaf1;}"
+    ".grid{display:grid;grid-template-columns:1fr;gap:14px;}"
+    ".card{background:#fffaf1;border:1.5px solid #111;border-radius:24px;padding:18px;box-shadow:4px 4px 0 #111;}"
+    ".row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;}"
+    ".num{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#6a665f;margin-bottom:8px;}"
+    ".date{font-size:13px;color:#6a665f;margin:-4px 0 12px;}"
+    ".title{font-size:24px;line-height:1.05;letter-spacing:-.04em;font-weight:750;margin:0 0 12px;}"
+    ".tag{border:1px solid #111;border-radius:999px;padding:5px 9px;font-size:12px;white-space:nowrap;background:#111;color:#fff;}"
+    ".text{font-size:15px;line-height:1.45;color:#222;margin:0 0 14px;white-space:pre-wrap;}"
+    ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}"
+    "a.btn{color:#111;text-decoration:none;border:1px solid #111;border-radius:999px;padding:8px 12px;background:#f3f0e9;font-size:13px;}"
+    "a.btn.primary{background:#111;color:#fff;}"
+    ".empty{border:1.5px dashed #111;border-radius:24px;padding:34px;text-align:center;color:#6a665f;}"
+    "audio{width:100%;margin-top:8px;}"
+    "@media(max-width:520px){body{padding:16px}h1{font-size:36px}.card{border-radius:20px}.title{font-size:21px}}"
+    "</style>"
+  );
 }
 
-void networkLoop() {
-    server.handleClient();
+// ─── Portal handlers ───────────────────────────────────────────────────────────────────────────
+void handlePortalRoot() {
+  loadIndex();
+
+  Serial.println("[HTTP] GET /");
+  String filter = "All";
+  if (transferServer.hasArg("tag")) filter = transferServer.arg("tag");
+
+  transferServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  transferServer.send(200, "text/html", "");
+
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Amar Note Portal</title>" + portalCss() + "</head><body><div class='wrap'>";
+
+  html += "<div class='top'><div><h1>amar note<br>portal</h1>"
+          "<div class='sub'>local note transfer · <a href=\"/tags\" style=\"color:inherit\">tags</a> · <a href=\"/provision\" style=\"color:inherit\">setup</a> · <a href=\"/ota\" style=\"color:inherit\">update</a></div></div>"
+          "<div class='pill'>" + String((int)noteIndex.size()) + " notes</div></div>";
+
+  html += "<div class='actions' style='margin-bottom:18px'>";
+  html += "<a class='btn " + String(filter == "All" ? "primary" : "") + "' href='/'>All</a>";
+  for (int t = 0; t < tagCount; t++) {
+    String tag = String(tags[t]);
+    html += "<a class='btn " + String(filter == tag ? "primary" : "") + "' href='/?tag=" + tag + "'>" + htmlEscape(tag) + "</a>";
+  }
+  html += "</div>";
+
+  html += "<div class='actions' style='margin-bottom:24px'>";
+  html += "<a class='btn primary' href='/export.txt'>Download all TXT</a>";
+  if (filter != "All")
+    html += "<a class='btn' href='/export.txt?tag=" + filter + "'>Download " + htmlEscape(filter) + " TXT</a>";
+  html += "</div>";
+
+  int visibleCount = 0;
+  for (int i = 0; i < (int)noteIndex.size(); i++)
+    if (filter == "All" || filter == String(noteIndex[i].tag)) visibleCount++;
+
+  if (visibleCount <= 0) {
+    html += "<div class='empty'>No notes for this filter.</div>";
+  } else {
+    html += "<div class='grid'>";
+    for (int v = 0; v < (int)noteIndex.size(); v++) {
+      int i = (int)noteIndex.size() - 1 - v;
+      if (!(filter == "All" || filter == String(noteIndex[i].tag))) continue;
+      int num = noteIndex[i].num;
+
+      char txtPath[64], wavPath[64];
+      snprintf(txtPath, sizeof(txtPath), "%s/note_%03d.txt", NOTES_DIR, num);
+      snprintf(wavPath, sizeof(wavPath), "%s/note_%03d.wav", NOTES_DIR, num);
+
+      String transcript = readSmallFile(txtPath, 1200);
+      if (transcript.length() == 0)
+        transcript = noteIndex[i].hasText ? "(empty transcript)" : "Not transcribed yet.";
+
+      String title = transcript; title.replace("\n", " "); title.trim();
+      if (title.length() > 58) title = title.substring(0, 58) + "...";
+      if (title.length() == 0 || title == "Not transcribed yet.")
+        title = String("Voice note ") + String(num);
+
+      html += "<div class='card'>";
+      html += "<div class='row'><div><div class='num'>#" + String(num) + "</div>";
+      html += "<h2 class='title'>" + htmlEscape(title) + "</h2>";
+      String createdUtc = noteCreatedUtc(num);
+      if (createdUtc.length() > 0)
+        html += "<div class='date' data-utc='" + createdUtc + "'>" + createdUtc + "</div>";
+      else
+        html += "<div class='date'>time not set</div>";
+      html += "</div>";
+      html += "<div class='tag'>" + htmlEscape(String(noteIndex[i].tag)) + "</div></div>";
+      html += "<p class='text'>" + htmlEscape(transcript) + "</p>";
+      if (SD_MMC.exists(wavPath))
+        html += "<audio controls src='/audio?num=" + String(num) + "'></audio>";
+      html += "<div class='actions'>";
+      html += "<a class='btn primary' href='/txt?num=" + String(num) + "'>Download TXT</a>";
+      if (SD_MMC.exists(wavPath))
+        html += "<a class='btn' href='/wav?num=" + String(num) + "'>Download WAV</a>";
+      html += "<a class='btn' style='margin-left:auto;color:#c0392b;border-color:#c0392b' "
+              "href='/note/delete?num=" + String(num) + "' "
+              "onclick=\"return confirm('Delete note #" + String(num) + "? This cannot be undone.')\">Delete</a>";
+      html += "</div></div>";
+      if (html.length() > 2048) { transferServer.sendContent(html); html = ""; }
+    }
+    html += "</div>";
+  }
+
+  html += "<script>"
+          "document.querySelectorAll('[data-utc]').forEach(function(el){"
+          "var d=new Date(el.dataset.utc);"
+          "if(!isNaN(d)){el.textContent=d.toLocaleString([],{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});}"
+          "});"
+          "</script>";
+  html += "</div></body></html>";
+  transferServer.sendContent(html);
+  transferServer.sendContent("");
 }
 
-bool networkIsConnected() { return wifiConnected; }
+void handlePortalJson() {
+  loadIndex();
+  String json = "[";
+  for (int v = 0; v < (int)noteIndex.size(); v++) {
+    int i = (int)noteIndex.size() - 1 - v;
+    if (v > 0) json += ",";
+    json += "{";
+    json += "\"num\":" + String(noteIndex[i].num) + ",";
+    json += "\"tag\":\"" + String(noteIndex[i].tag) + "\",";
+    json += "\"hasText\":" + String(noteIndex[i].hasText ? "true" : "false");
+    json += "}";
+  }
+  json += "]";
+  transferServer.send(200, "application/json", json);
+}
+
+void handleExportTxt() {
+  loadIndex();
+  String filter = "All";
+  if (transferServer.hasArg("tag")) filter = transferServer.arg("tag");
+
+  String filename = "amar_notes_export";
+  if (filter != "All") filename += "_" + filter;
+  filename += ".txt";
+
+  transferServer.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+  transferServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  transferServer.send(200, "text/plain", "");
+
+  String chunk = "Amar Note Export\nFilter: " + filter + "\n------------------------------\n\n";
+
+  for (int v = 0; v < (int)noteIndex.size(); v++) {
+    int i = (int)noteIndex.size() - 1 - v;
+    if (!(filter == "All" || filter == String(noteIndex[i].tag))) continue;
+    int num = noteIndex[i].num;
+    char txtPath[64]; snprintf(txtPath, sizeof(txtPath), "%s/note_%03d.txt", NOTES_DIR, num);
+    String transcript = readSmallFile(txtPath, 4000);
+    if (transcript.length() == 0)
+      transcript = noteIndex[i].hasText ? "(empty transcript)" : "Not transcribed yet.";
+    chunk += "#";
+    if (num < 100) chunk += "0";
+    if (num < 10)  chunk += "0";
+    chunk += String(num) + " \u00b7 " + String(noteIndex[i].tag) + "\n";
+    String createdUtc = noteCreatedUtc(num);
+    if (createdUtc.length() > 0) chunk += createdUtc + "\n";
+    chunk += "\n" + transcript + "\n\n------------------------------\n\n";
+    if (chunk.length() > 2048) { transferServer.sendContent(chunk); chunk = ""; }
+  }
+
+  transferServer.sendContent(chunk);
+  transferServer.sendContent("");
+}
+
+void sendFileByNum(const char* ext, const char* mime, bool attachment) {
+  if (!transferServer.hasArg("num")) { transferServer.send(400, "text/plain", "Missing num"); return; }
+  int num = transferServer.arg("num").toInt();
+  if (num <= 0) { transferServer.send(400, "text/plain", "Invalid num"); return; }
+  char path[64]; snprintf(path, sizeof(path), "%s/note_%03d.%s", NOTES_DIR, num, ext);
+  File f = SD_MMC.open(path);
+  if (!f) { transferServer.send(404, "text/plain", "File not found"); return; }
+  if (attachment) {
+    String filename = String("note_") + String(num) + "." + String(ext);
+    transferServer.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+  }
+  transferServer.streamFile(f, mime);
+  f.close();
+}
+
+void handleTagAdd() {
+  if (!transferServer.hasArg("name")) {
+    transferServer.sendHeader("Location", "/tags?msg=missing");
+    transferServer.send(303); return;
+  }
+  String name = urlDecodeSimple(transferServer.arg("name"));
+  bool ok = addCustomTag(name.c_str());
+  transferServer.sendHeader("Location", ok ? "/tags?msg=added" : "/tags?msg=exists");
+  transferServer.send(303);
+}
+
+void handleTagDelete() {
+  if (!transferServer.hasArg("name")) {
+    transferServer.sendHeader("Location", "/tags?msg=missing");
+    transferServer.send(303); return;
+  }
+  String name = urlDecodeSimple(transferServer.arg("name"));
+  bool hadNotes = tagHasNotes(name.c_str());
+  bool ok = deleteTag(name.c_str());
+  if (ok && hadNotes) transferServer.sendHeader("Location", "/tags?msg=moved");
+  else                transferServer.sendHeader("Location", ok ? "/tags?msg=deleted" : "/tags?msg=protected");
+  transferServer.send(303);
+}
+
+void handleTagsPage() {
+  loadTags();
+  loadIndex();
+  activeFilter = -1;
+
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Amar Note Tags</title>"
+                "<style>"
+                "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px;background:#f3f0e9;color:#111}"
+                ".wrap{max-width:720px;margin:0 auto}"
+                "h1{font-size:42px;line-height:.9;letter-spacing:-.05em;margin:0 0 22px;font-weight:800}"
+                ".card{background:#fffaf1;border:1.5px solid #111;border-radius:24px;padding:18px;margin:14px 0;box-shadow:4px 4px 0 #111}"
+                ".row{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #ddd;padding:12px 0}"
+                ".row:first-child{border-top:0}"
+                ".tag{font-size:20px;font-weight:700}"
+                ".meta{font-size:13px;color:#666;margin-top:4px}"
+                "input{font:inherit;padding:12px;border:1.5px solid #111;border-radius:999px;background:#fff;width:100%;box-sizing:border-box}"
+                "button,.btn{font:inherit;border:1.5px solid #111;border-radius:999px;padding:10px 14px;background:#111;color:#fff;text-decoration:none;white-space:nowrap}"
+                ".danger{background:#fffaf1;color:#111}"
+                ".msg{border:1.5px solid #111;border-radius:18px;padding:12px 14px;background:#fff;margin:12px 0}"
+                ".hint{font-size:13px;color:#666;line-height:1.4}"
+                "form.add{display:flex;gap:10px}"
+                "</style></head><body><div class='wrap'>";
+
+  html += "<h1>amar note<br>tags</h1>";
+  html += "<a class='btn' href='/'>Back to notes</a>";
+
+  if (transferServer.hasArg("msg")) {
+    String msg = transferServer.arg("msg");
+    html += "<div class='msg'>";
+    if (msg == "added") html += "Tag added.";
+    else if (msg == "exists")    html += "Tag already exists or cannot be added.";
+    else if (msg == "deleted")   html += "Tag deleted.";
+    else if (msg == "moved")     html += "Tag deleted. Existing notes were moved to Untagged.";
+    else if (msg == "protected") html += "This tag cannot be deleted.";
+    else html += "Please enter a tag name.";
+    html += "</div>";
+  }
+
+  html += "<div class='card'><form class='add' action='/tag/add' method='get'>"
+          "<input name='name' maxlength='31' placeholder='New tag name'>"
+          "<button type='submit'>Add</button></form>"
+          "<p class='hint'>Tags appear on the device after recording. Keep them short for the e-paper UI.</p></div>";
+
+  html += "<div class='card'>";
+  for (int i = 0; i < tagCount; i++) {
+    int cnt = 0;
+    for (int n = 0; n < (int)noteIndex.size(); n++)
+      if (strcmp(noteIndex[n].tag, tags[i]) == 0) cnt++;
+    html += "<div class='row'><div><div class='tag'>" + htmlEscape(String(tags[i])) + "</div>";
+    html += "<div class='meta'>" + String(cnt) + (cnt == 1 ? " note" : " notes");
+    if (cnt > 0) html += " \u00b7 deleting moves them to Untagged";
+    html += "</div></div>";
+    if (strcasecmp(tags[i], "Untagged") != 0) {
+      html += "<a class='btn danger' href='/tag/delete?name=" + htmlEscape(String(tags[i])) + "' "
+              "onclick=\"return confirm('Delete this tag? Notes will not be deleted. Existing notes will move to Untagged.');\">Delete</a>";
+    }
+    html += "</div>";
+  }
+  html += "</div></div></body></html>";
+  transferServer.send(200, "text/html", html);
+}
+
+void handleNoteDelete() {
+  if (!transferServer.hasArg("num")) { transferServer.send(400, "text/plain", "Missing num"); return; }
+  int num = transferServer.arg("num").toInt();
+  if (num <= 0) { transferServer.send(400, "text/plain", "Invalid num"); return; }
+  deleteNote(num);
+  transferServer.sendHeader("Location", "/");
+  transferServer.send(303);
+}
+
+void handleProvisionPage() {
+  Serial.println("[HTTP] GET /provision");
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Amar Note Setup</title>" + portalCss() + "</head><body><div class='wrap'>";
+  html += "<div class='top'><div><h1>amar note<br>setup</h1>"
+          "<div class='sub'>device provisioning</div></div></div>";
+  html += "<div class='card'>";
+  html += "<p class='hint'>Wi-Fi: " + String(cfg::hasWifi() ? "configured" : "not set") +
+          " &middot; OpenAI key: " + String(cfg::hasOpenAiKey() ? "configured" : "not set") +
+          " &middot; GitHub: " + String(cfg::hasGithub() ? "on" : (cfg::githubRepo().length() ? "set, off" : "not set")) + "</p>";
+  html += "<form action='/provision/save' method='post'>";
+  html += "<p><input name='ssid' placeholder='Wi-Fi network (SSID)'></p>";
+  html += "<p><input name='pass' type='password' placeholder='Wi-Fi password'></p>";
+  html += "<p><input name='openai' type='password' placeholder='OpenAI API key (sk-...)'></p>";
+  html += "<hr><p class='hint'><b>Obsidian / GitHub vault</b></p>";
+  html += "<p><input name='gh_repo' placeholder='GitHub repo (owner/name)' value='" + htmlEscape(cfg::githubRepo()) + "'></p>";
+  html += "<p><input name='gh_branch' placeholder='Branch (default main)' value='" + htmlEscape(cfg::githubBranch()) + "'></p>";
+  html += "<p><input name='gh_dir' placeholder='Vault folder (default VoiceNotes)' value='" + htmlEscape(cfg::githubDir()) + "'></p>";
+  html += "<p><input name='gh_token' type='password' placeholder='GitHub token (github_pat_...)'></p>";
+  html += "<p><label><input type='checkbox' name='gh_on' value='1'" + String(cfg::githubEnabled() ? " checked" : "") + "> Enable GitHub sync</label></p>";
+  html += "<p><label><input type='checkbox' name='gh_ai' value='1'" + String(cfg::githubAiEnrich() ? " checked" : "") + "> AI titles + topic links</label></p>";
+  html += "<p class='hint'>Leave a text field blank to keep its current value.</p>";
+  html += "<button type='submit'>Save</button></form></div>";
+  html += "<a class='btn' href='/'>Back to notes</a>";
+  html += "</div></body></html>";
+  transferServer.send(200, "text/html", html);
+}
+
+void handleProvisionSave() {
+  String ssid = transferServer.hasArg("ssid")   ? transferServer.arg("ssid")   : "";
+  String pass = transferServer.hasArg("pass")   ? transferServer.arg("pass")   : "";
+  String key  = transferServer.hasArg("openai") ? transferServer.arg("openai") : "";
+  ssid.trim(); key.trim();
+  bool changed = false;
+  if (ssid.length() > 0) { cfg::setWifi(ssid, pass); changed = true; }
+  if (key.length()  > 0) { cfg::setOpenAiKey(key);   changed = true; }
+
+  if (transferServer.hasArg("gh_repo")) {
+    String r = transferServer.arg("gh_repo"); r.trim();
+    if (r.length() > 0) { cfg::setGithubRepo(r); changed = true; }
+  }
+  if (transferServer.hasArg("gh_branch")) {
+    String b = transferServer.arg("gh_branch"); b.trim();
+    if (b.length() > 0) { cfg::setGithubBranch(b); changed = true; }
+  }
+  if (transferServer.hasArg("gh_dir")) {
+    String d = transferServer.arg("gh_dir"); d.trim();
+    if (d.length() > 0) { cfg::setGithubDir(d); changed = true; }
+  }
+  if (transferServer.hasArg("gh_token")) {
+    String t = transferServer.arg("gh_token"); t.trim();
+    if (t.length() > 0) { cfg::setGithubToken(t); changed = true; }
+  }
+  cfg::setGithubEnabled(transferServer.hasArg("gh_on"));
+  cfg::setGithubAiEnrich(transferServer.hasArg("gh_ai"));
+  changed = true;
+
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Amar Note Setup</title>" + portalCss() + "</head><body><div class='wrap'>";
+  html += "<div class='card'><h1>" + String(changed ? "saved" : "no change") + "</h1>";
+  html += "<p class='hint'>" + String(changed
+            ? "Settings stored to the device. Re-open Transfer or Sync to use them."
+            : "Nothing was submitted.") + "</p>";
+  html += "<a class='btn' href='/provision'>Back to setup</a></div></div></body></html>";
+  transferServer.send(200, "text/html", html);
+}
+
+void handleOtaPage() {
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Amar Note Update</title>" + portalCss() + "</head><body><div class='wrap'>";
+  html += "<div class='top'><div><h1>amar note<br>update</h1>"
+          "<div class='sub'>firmware " FW_VERSION "</div></div></div>";
+  html += "<div class='card'>";
+  html += "<p class='hint'>Paste an HTTPS URL to a compiled firmware .bin. "
+          "The device verifies the server certificate, flashes the inactive OTA slot, "
+          "and reboots into it (rolling back automatically if it fails to boot).</p>";
+  html += "<form action='/ota/run' method='post'>"
+          "<p><input name='url' placeholder='https://host/amar-note.bin'></p>"
+          "<button type='submit'>Update firmware</button></form></div>";
+  html += "<a class='btn' href='/'>Back to notes</a>";
+  html += "</div></body></html>";
+  transferServer.send(200, "text/html", html);
+}
+
+void handleOtaRun() {
+  if (!transferServer.hasArg("url") || transferServer.arg("url").length() == 0) {
+    transferServer.send(400, "text/plain", "Missing url");
+    return;
+  }
+  String url = transferServer.arg("url");
+  transferServer.send(200, "text/html",
+    "<!doctype html><meta charset='utf-8'><h1>Updating&hellip;</h1>"
+    "<p>Flashing firmware. The device reboots automatically if the update succeeds. "
+    "If it fails it stays on the current version &mdash; reopen Transfer and retry.</p>");
+  delay(250);
+
+  WiFiClientSecure client;
+  client.setCACertBundle(x509_crt_bundle_start,
+                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+  httpUpdate.rebootOnUpdate(true);
+  t_httpUpdate_return r = httpUpdate.update(client, url, FW_VERSION);
+  if (r == HTTP_UPDATE_FAILED)
+    Serial.printf("[OTA] failed (%d): %s\n",
+                  httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+  else if (r == HTTP_UPDATE_NO_UPDATES)
+    Serial.println("[OTA] no update available");
+}
+
+void setupTransferServer() {
+  transferServer.on("/", HTTP_GET, handlePortalRoot);
+  transferServer.on("/provision", HTTP_GET, handleProvisionPage);
+  transferServer.on("/provision/save", HTTP_POST, handleProvisionSave);
+  transferServer.on("/ota", HTTP_GET, handleOtaPage);
+  transferServer.on("/ota/run", HTTP_POST, handleOtaRun);
+  transferServer.on("/tags", HTTP_GET, handleTagsPage);
+  transferServer.on("/tag/add", HTTP_GET, handleTagAdd);
+  transferServer.on("/tag/delete", HTTP_GET, handleTagDelete);
+  transferServer.on("/note/delete", HTTP_GET, handleNoteDelete);
+  transferServer.on("/api/notes", HTTP_GET, handlePortalJson);
+  transferServer.on("/export.txt", HTTP_GET, handleExportTxt);
+  transferServer.on("/txt",   HTTP_GET, [](){ sendFileByNum("txt", "text/plain", true); });
+  transferServer.on("/wav",   HTTP_GET, [](){ sendFileByNum("wav", "audio/wav",  true); });
+  transferServer.on("/audio", HTTP_GET, [](){ sendFileByNum("wav", "audio/wav",  false); });
+  transferServer.onNotFound([](){
+    Serial.printf("[HTTP] miss: %s\n", transferServer.uri().c_str());
+    if (captivePortalActive) {
+      transferServer.sendHeader("Location", "http://" + transferUrl + "/provision", true);
+      transferServer.send(302, "text/plain", "");
+    } else {
+      transferServer.send(404, "text/plain", "Not found");
+    }
+  });
+}
+
+void stopTransferMode() {
+  if (transferServerActive) {
+    transferServer.stop();
+    transferServerActive = false;
+  }
+  if (captivePortalActive) {
+    dnsServer.stop();
+    captivePortalActive = false;
+  }
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  transferUrl = "";
+}
