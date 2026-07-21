@@ -10,10 +10,16 @@ namespace cfg {
   String wifiSsid();
   String wifiPass();
   String openaiKey();
+  String groqKey();                                     // Groq free-tier STT key (gsk_...)
+  uint8_t sttProvider();                                // 0 = OpenAI, 1 = Groq
   bool   hasWifi();                                     // Wi-Fi credentials present
   bool   hasOpenAiKey();                                // transcription key present
+  bool   hasGroqKey();                                  // Groq key present
+  bool   hasSttKey();                                   // any STT key present
   bool   setWifi(const String& ssid, const String& pass);
   bool   setOpenAiKey(const String& key);
+  bool   setGroqKey(const String& key);
+  void   setSttProvider(uint8_t p);                     // 0=OpenAI 1=Groq
 
   // GitHub / Obsidian vault sync
   String githubToken();

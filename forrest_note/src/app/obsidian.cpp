@@ -19,30 +19,30 @@ extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
 enum GhResult { GH_OK, GH_AUTH, GH_RATELIMIT, GH_NET, GH_OTHER };
 
-// Decode an HTTP/1.1 chunked-transfer body: repeated "<hexsize>\r\n<data>\r\n"
-// until a zero-size chunk. OpenAI's chat endpoint replies chunked (GitHub doesn't),
-// and without this the raw body keeps its chunk markers and fails to JSON-parse.
+// Decode an HTTP/1.1 chunked-transfer body.
 static String dechunkBody(const String& in) {
   String out; int i = 0, n = in.length();
   while (i < n) {
     int eol = in.indexOf('\n', i);
     if (eol < 0) break;
     String sizeLine = in.substring(i, eol);
-    int semi = sizeLine.indexOf(';');                 // ignore chunk extensions
+    int semi = sizeLine.indexOf(';');
     if (semi >= 0) sizeLine = sizeLine.substring(0, semi);
     sizeLine.trim();
     long sz = strtol(sizeLine.c_str(), nullptr, 16);
     i = eol + 1;
-    if (sz <= 0) break;                               // terminating 0-chunk
-    if (i + sz > n) sz = n - i;                        // guard against truncation
+    if (sz <= 0) break;
+    if (i + sz > n) sz = n - i;
     out += in.substring(i, i + sz);
     i += sz;
-    while (i < n && (in[i] == '\r' || in[i] == '\n')) i++;  // skip CRLF after data
+    while (i < n && (in[i] == '\r' || in[i] == '\n')) i++;
   }
   return out;
 }
 
-// ── Generic HTTPS request (reuses the transcribeOnce pattern) ───────────────
+// ── Generic HTTPS request ─────────────────────────────────────────────────
+// Reads the response body in 512-byte chunks instead of one byte at a time
+// to avoid the severe per-byte TLS overhead on WiFiClientSecure.
 static bool httpsSend(const char* host, const String& method, const String& path,
                       const std::vector<String>& headers, const String& body,
                       int& outStatus, String& outBody) {
@@ -61,44 +61,150 @@ static bool httpsSend(const char* host, const String& method, const String& path
   if (body.length()) client.print(body);
 
   uint32_t deadline = millis() + 30000;
-  while (!client.available() && millis() < deadline) delay(10);
-
   outStatus = 0; outBody = "";
   bool inBody = false, statusParsed = false, chunked = false;
-  while (client.available() || (client.connected() && millis() < deadline)) {
+
+  // Header phase: read line-by-line
+  while (!inBody && (client.connected() || client.available()) && millis() < deadline) {
     if (!client.available()) { delay(5); continue; }
-    if (!inBody) {
-      String line = client.readStringUntil('\n');
-      if (!statusParsed && line.startsWith("HTTP/")) {
-        int sp = line.indexOf(' ');
-        if (sp > 0) outStatus = line.substring(sp + 1, sp + 4).toInt();
-        statusParsed = true;
-      }
-      String low = line; low.toLowerCase();
-      if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") >= 0) chunked = true;
-      if (line == "\r" || line == "") inBody = true;
-    } else {
-      while (client.available() && outBody.length() < 131072) outBody += (char)client.read();
+    String line = client.readStringUntil('\n');
+    if (!statusParsed && line.startsWith("HTTP/")) {
+      int sp = line.indexOf(' ');
+      if (sp > 0) outStatus = line.substring(sp + 1, sp + 4).toInt();
+      statusParsed = true;
     }
+    String low = line; low.toLowerCase();
+    if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") >= 0) chunked = true;
+    if (line == "\r" || line == "") inBody = true;
+  }
+
+  // Body phase: read in 512-byte chunks (avoids per-byte TLS overhead)
+  uint8_t buf[512];
+  while ((client.connected() || client.available()) && millis() < deadline) {
+    if (!client.available()) { delay(5); continue; }
+    int n = client.read(buf, sizeof(buf));
+    if (n <= 0) continue;
+    outBody.reserve(outBody.length() + n);
+    for (int i = 0; i < n; i++) outBody += (char)buf[i];
+    if (outBody.length() >= 131072) break;          // safety cap
   }
   client.stop();
-  if (chunked) outBody = dechunkBody(outBody);        // OpenAI chat replies chunked
+  if (chunked) outBody = dechunkBody(outBody);
   return statusParsed;
 }
 
-// ── Small string helpers ────────────────────────────────────────────────────
+// ── Whisper transcription (OpenAI or Groq) ─────────────────────────────────
+// Sends the WAV file at `wavPath` to the active STT provider and returns the
+// transcript text. Returns an empty string on failure.
+//
+// Both OpenAI and Groq use the same multipart/form-data shape and identical
+// JSON response format — only the host and model name differ.
+static String transcribeWav(const char* wavPath) {
+  if (WiFi.status() != WL_CONNECTED) return "";
+
+  uint8_t provider  = configGetSttProvider();
+  String  apiKey    = (provider == 1) ? configGetGroqKey() : configGetOpenAIKey();
+  if (apiKey.length() == 0) return "";
+
+  const char* host  = (provider == 1) ? "api.groq.com"    : "api.openai.com";
+  const char* model = (provider == 1) ? "whisper-large-v3-turbo" : "whisper-1";
+
+  File f = SD_MMC.open(wavPath);
+  if (!f) { Serial.printf("[stt] cannot open %s\n", wavPath); return ""; }
+  size_t fileSize = f.size();
+  if (fileSize == 0) { f.close(); return ""; }
+
+  // Build multipart body directly onto the wire to avoid double-buffering the
+  // audio in heap (old approach malloc'd the file twice simultaneously).
+  // We build header + footer as small strings, then stream the file body.
+  String boundary = "----AmarBoundary7e2a4f";
+  String partHead =
+      "--" + boundary + "\r\n"
+      "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
+      "Content-Type: audio/wav\r\n\r\n";
+  String partModel =
+      "\r\n--" + boundary + "\r\n"
+      "Content-Disposition: form-data; name=\"model\"\r\n\r\n" +
+      String(model) +
+      "\r\n--" + boundary + "--\r\n";
+  size_t totalLen = partHead.length() + fileSize + partModel.length();
+
+  WiFiClientSecure client;
+  client.setCACertBundle(x509_crt_bundle_start,
+                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+  client.setHandshakeTimeout(15);
+  if (!client.connect(host, 443, 20000)) { f.close(); return ""; }
+
+  // HTTP request line + headers
+  client.printf("POST /v1/audio/transcriptions HTTP/1.1\r\nHost: %s\r\n", host);
+  client.printf("Authorization: Bearer %s\r\n", apiKey.c_str());
+  client.printf("Content-Type: multipart/form-data; boundary=%s\r\n", boundary.c_str());
+  client.printf("Content-Length: %u\r\nConnection: close\r\n\r\n", (unsigned)totalLen);
+
+  // Stream body: part header → file bytes (512-byte blocks) → part footer
+  client.print(partHead);
+  uint8_t buf[512];
+  size_t remaining = fileSize;
+  while (remaining > 0) {
+    size_t chunk = (remaining > sizeof(buf)) ? sizeof(buf) : remaining;
+    int rd = f.read(buf, chunk);
+    if (rd <= 0) break;
+    client.write(buf, rd);
+    remaining -= rd;
+  }
+  f.close();
+  client.print(partModel);
+
+  // Read response
+  uint32_t deadline = millis() + 60000;
+  int status = 0; String resp = "";
+  bool inBody = false, statusParsed = false, chunked = false;
+  while (!inBody && (client.connected() || client.available()) && millis() < deadline) {
+    if (!client.available()) { delay(5); continue; }
+    String line = client.readStringUntil('\n');
+    if (!statusParsed && line.startsWith("HTTP/")) {
+      int sp = line.indexOf(' ');
+      if (sp > 0) status = line.substring(sp + 1, sp + 4).toInt();
+      statusParsed = true;
+    }
+    String low = line; low.toLowerCase();
+    if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") >= 0) chunked = true;
+    if (line == "\r" || line == "") inBody = true;
+  }
+  while ((client.connected() || client.available()) && millis() < deadline) {
+    if (!client.available()) { delay(5); continue; }
+    int n = client.read(buf, sizeof(buf));
+    if (n <= 0) continue;
+    for (int i = 0; i < n; i++) resp += (char)buf[i];
+    if (resp.length() >= 16384) break;
+  }
+  client.stop();
+  if (chunked) resp = dechunkBody(resp);
+
+  if (status != 200) {
+    Serial.printf("[stt] %s http %d\n", (provider==1)?"groq":"openai", status);
+    return "";
+  }
+  DynamicJsonDocument doc(resp.length() + 512);
+  if (deserializeJson(doc, resp)) return "";
+  String text = doc["text"] | "";
+  text.trim();
+  return text;
+}
+
+// ── Small string helpers ───────────────────────────────────────────────────
 static String yamlEsc(const String& s) {
   String o = s; o.replace("\\", "\\\\"); o.replace("\"", "\\\"");
   o.replace("\r", " "); o.replace("\n", " "); return o;
 }
 
-static String linkSafe(const String& s) {          // strip Obsidian-illegal link chars
+static String linkSafe(const String& s) {
   String o; for (size_t i = 0; i < s.length(); i++) {
     char c = s[i]; if (strchr("[]#|^/\\:", c)) continue; o += c;
   } o.trim(); return o;
 }
 
-static String tagSlug(const String& s) {            // safe file/link slug
+static String tagSlug(const String& s) {
   String o; for (size_t i = 0; i < s.length(); i++) {
     char c = s[i];
     o += (isalnum((unsigned char)c) || c == ' ' || c == '_' || c == '-') ? c : '-';
@@ -136,23 +242,26 @@ static String base64Encode(const String& in) {
   return String((char*)out.data());
 }
 
-// A calendar event extracted from a note ("I'm going to Soho House tomorrow").
-// Empty title/start means the note didn't describe a dated plan.
 struct NoteEvent { String title, start, end; bool allDay = false; };
 
-// ── AI enrichment: title + summary + cleaned body + topics + calendar event ──
+// ── AI enrichment ─────────────────────────────────────────────────────────
+// Always uses OpenAI GPT-4o-mini regardless of the STT provider choice.
+// Cap DynamicJsonDocument at a fixed 12 KB instead of transcript*2 to
+// avoid unpredictable PSRAM fragmentation on long notes.
 static bool enrichNote(const String& transcript, const String& nowLocal,
                        String& title, String& summary, String& cleaned,
                        std::vector<String>& topics, NoteEvent& evt) {
   title = ""; summary = ""; cleaned = ""; topics.clear();
   evt = NoteEvent();
-  String key = cfg::openaiKey();
+  String key = configGetOpenAIKey();
   if (key.length() == 0 || WiFi.status() != WL_CONNECTED) return false;
 
   String input = transcript;
   if (input.length() > 6000) input = input.substring(0, 6000);
 
-  DynamicJsonDocument reqDoc(9000 + input.length() * 2);
+  // Fixed 12 KB allocation — sufficient for the request envelope; the transcript
+  // is injected as a raw string value, not duplicated in the document tree.
+  DynamicJsonDocument reqDoc(12288);
   reqDoc["model"] = "gpt-4o-mini";
   reqDoc["temperature"] = 0;
   reqDoc.createNestedObject("response_format")["type"] = "json_object";
@@ -220,7 +329,7 @@ static bool enrichNote(const String& transcript, const String& nowLocal,
   return true;
 }
 
-// ── Markdown ────────────────────────────────────────────────────────────────
+// ── Markdown builder ───────────────────────────────────────────────────────
 static String buildNoteMarkdown(int num, const String& uid,
                                 const String& transcript, const String& cleaned,
                                 const String& title, const String& summary,
@@ -229,15 +338,12 @@ static String buildNoteMarkdown(int num, const String& uid,
                                 const NoteEvent& evt) {
   String md = "---\n";
   md += "title: \"" + yamlEsc(title) + "\"\n";
-  // Alias keeps name-based search/[[autocomplete]] working while the file's real
-  // (unique) name stays the date-time uid, so same-titled notes never collide.
   if (title.length()) md += "aliases: [\"" + yamlEsc(title) + "\"]\n";
   if (createdUtc.length()) md += "date: " + createdUtc + "\n";
   md += "id: " + String(num) + "\n";
   md += "uid: " + uid + "\n";
-  md += "source: forrest-note\n";
+  md += "source: amar-note\n";
 
-  // frontmatter tags = user tag + topics (Obsidian tags can't contain spaces)
   String list = "";
   std::vector<String> all; all.push_back(userTag);
   for (size_t i = 0; i < topics.size(); i++) all.push_back(topics[i]);
@@ -249,8 +355,6 @@ static String buildNoteMarkdown(int num, const String& uid,
   }
   md += "tags: [" + list + "]\n";
 
-  // Calendar event fields (read by the Mac-side bridge that adds them to Apple
-  // Calendar). Only emitted when the AI extracted a dated plan from the note.
   if (evt.title.length() && evt.start.length()) {
     md += "event_title: \"" + yamlEsc(evt.title) + "\"\n";
     md += "event_start: " + evt.start + "\n";
@@ -261,13 +365,11 @@ static String buildNoteMarkdown(int num, const String& uid,
 
   if (summary.length()) md += "> [!summary] " + summary + "\n\n";
 
-  // Body: AI-cleaned coherent rewrite when available, else the raw transcript.
   String bodyText = cleaned.length() ? cleaned : transcript;
-  if (bodyText.startsWith("---")) bodyText = "\n" + bodyText;   // don't look like frontmatter
+  if (bodyText.startsWith("---")) bodyText = "\n" + bodyText;
   md += bodyText;
   if (!bodyText.endsWith("\n")) md += "\n";
 
-  // Preserve the verbatim transcript in a foldable callout when we rewrote the body.
   if (cleaned.length() && transcript.length()) {
     String raw = transcript; raw.trim();
     md += "\n> [!quote]- Original transcript\n> ";
@@ -294,14 +396,14 @@ static String buildNoteMarkdown(int num, const String& uid,
   return md;
 }
 
-// ── GitHub Contents API ─────────────────────────────────────────────────────
-static int githubGetSha(const String& path, String& sha) {   // returns HTTP status, -1 on net fail
+// ── GitHub Contents API ────────────────────────────────────────────────────
+static int githubGetSha(const String& path, String& sha) {
   sha = "";
-  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path) +
-               "?ref=" + cfg::githubBranch();
+  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path) +
+               "?ref=" + configGetGHBranch();
   std::vector<String> headers = {
-    "Authorization: Bearer " + cfg::githubToken(),
-    "User-Agent: ForrestNote",
+    "Authorization: Bearer " + configGetGHToken(),
+    "User-Agent: AmarNote",
     "Accept: application/vnd.github+json"
   };
   int status; String resp;
@@ -321,7 +423,7 @@ static GhResult githubPutFile(const String& path, const String& content, const S
   if (gs == -1)  return GH_NET;
   if (gs == 401) return GH_AUTH;
   if (gs == 403) return GH_RATELIMIT;
-  if (gs != 200 && gs != 404) return GH_OTHER;   // 200=update, 404=create
+  if (gs != 200 && gs != 404) return GH_OTHER;
 
   String b64 = base64Encode(content);
   if (b64.length() == 0) return GH_OTHER;
@@ -329,14 +431,14 @@ static GhResult githubPutFile(const String& path, const String& content, const S
   DynamicJsonDocument doc(b64.length() + 512);
   doc["message"] = msg;
   doc["content"] = b64;
-  doc["branch"]  = cfg::githubBranch();
+  doc["branch"]  = configGetGHBranch();
   if (sha.length()) doc["sha"] = sha;
   String body; serializeJson(doc, body);
 
-  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path);
+  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path);
   std::vector<String> headers = {
-    "Authorization: Bearer " + cfg::githubToken(),
-    "User-Agent: ForrestNote",
+    "Authorization: Bearer " + configGetGHToken(),
+    "User-Agent: AmarNote",
     "Accept: application/vnd.github+json",
     "Content-Type: application/json"
   };
@@ -357,19 +459,19 @@ static GhResult githubDeleteFile(const String& path, const String& msg) {
   if (gs == -1)  return GH_NET;
   if (gs == 401) return GH_AUTH;
   if (gs == 403) return GH_RATELIMIT;
-  if (gs == 404) return GH_OK;                   // already gone -> success
+  if (gs == 404) return GH_OK;
   if (gs != 200 || sha.length() == 0) return GH_OTHER;
 
   DynamicJsonDocument doc(sha.length() + 512);
   doc["message"] = msg;
   doc["sha"]     = sha;
-  doc["branch"]  = cfg::githubBranch();
+  doc["branch"]  = configGetGHBranch();
   String body; serializeJson(doc, body);
 
-  String url = "/repos/" + cfg::githubRepo() + "/contents/" + urlEncodePath(path);
+  String url = "/repos/" + configGetGHRepo() + "/contents/" + urlEncodePath(path);
   std::vector<String> headers = {
-    "Authorization: Bearer " + cfg::githubToken(),
-    "User-Agent: ForrestNote",
+    "Authorization: Bearer " + configGetGHToken(),
+    "User-Agent: AmarNote",
     "Accept: application/vnd.github+json",
     "Content-Type: application/json"
   };
@@ -378,54 +480,46 @@ static GhResult githubDeleteFile(const String& path, const String& msg) {
   if (status == 200) return GH_OK;
   if (status == 401) return GH_AUTH;
   if (status == 403) return (resp.indexOf("rate limit") >= 0) ? GH_RATELIMIT : GH_AUTH;
-  if (status == 404 || status == 422) return GH_OK;   // gone / sha moved on -> treat as done
+  if (status == 404 || status == 422) return GH_OK;
   Serial.printf("[gh] DELETE %s -> %d\n", path.c_str(), status);
   return GH_OTHER;
 }
 
-// Choose the vault filename stem for a fresh note: the (one-word) title, with
-// " 2", " 3"… appended if that name is already taken in the vault. Probes the
-// GitHub Contents API per candidate. If we can't verify (network/auth error) or
-// hit too many collisions, fall back to the note's unique date-time id so we can
-// never clobber a different note's file.
 static String pickVaultStem(int num, const String& title) {
   String base = tagSlug(title);
   if (!base.length()) base = "Note";
-  String dir = cfg::githubDir();
+  String dir = configGetGHDir();
   for (int n = 1; n <= 50; n++) {
     String stem = (n == 1) ? base : (base + " " + String(n));
     String sha;
     int gs = githubGetSha(dir + "/" + stem + ".md", sha);
-    if (gs == 404) return stem;            // name is free -> use it
-    if (gs != 200) return noteUid(num);    // can't verify -> unique fallback
-    // gs == 200: taken by another note, try the next suffix
+    if (gs == 404) return stem;
+    if (gs != 200) return noteUid(num);
   }
-  return noteUid(num);                      // pathological collision count -> unique
+  return noteUid(num);
 }
 
+// Only rebuild MOCs for the tags that were actually touched in this sync run.
+// Previously this rebuilt every non-empty tag on every sync (up to 20 extra
+// GitHub API calls per session for untouched tags).
 static GhResult buildAndPushTagMOC(const char* tag) {
   String md = "---\ntitle: \"" + yamlEsc(String(tag)) + "\"\ntype: MOC\n---\n\n# " +
               String(tag) + "\n\n";
   for (int i = 0; i < (int)noteIndex.size(); i++) {
     if (noteIndex[i].hasText && strcmp(noteIndex[i].tag, tag) == 0) {
       String uid = noteUid(noteIndex[i].num);
-      String t   = linkSafe(noteTitle(noteIndex[i].num));   // strip [ ] | ^ etc from display
-      // Word-named files already read as the title, so skip the redundant alias.
+      String t   = linkSafe(noteTitle(noteIndex[i].num));
       md += (t.length() && t != uid) ? ("- [[" + uid + "|" + t + "]]\n")
                                      : ("- [[" + uid + "]]\n");
     }
   }
-  String path = cfg::githubDir() + "/Tags/" + tagSlug(String(tag)) + ".md";
+  String path = configGetGHDir() + "/Tags/" + tagSlug(String(tag)) + ".md";
   return githubPutFile(path, md, "Update tag MOC: " + String(tag));
 }
 
-// ── Vault deletion queue ────────────────────────────────────────────────────
-// Drains /notes/tombs.csv: each "uid,tag" line is a note that was removed on the
-// device and must be removed from the vault too. We delete the .md, then rebuild
-// the MOCs of affected tags (now excluding the gone note). Lines we couldn't
-// process (offline / rate-limited) stay queued for the next call.
+// ── Vault deletion queue ───────────────────────────────────────────────────
 void obsidianFlushDeletes() {
-  if (!cfg::hasGithub() || WiFi.status() != WL_CONNECTED) return;
+  if (!configGetGHEnabled() || WiFi.status() != WL_CONNECTED) return;
   if (!SD_MMC.exists(TOMBS_FILE)) return;
 
   std::vector<String> uids, tags;
@@ -446,7 +540,7 @@ void obsidianFlushDeletes() {
   std::vector<String> affectedTags;
   for (size_t i = 0; i < uids.size(); i++) {
     if (WiFi.status() != WL_CONNECTED) break;
-    String path = cfg::githubDir() + "/" + uids[i] + ".md";
+    String path = configGetGHDir() + "/" + uids[i] + ".md";
     GhResult r = githubDeleteFile(path, "Delete " + uids[i] + ".md");
     if (r == GH_OK) {
       done[i] = true;
@@ -455,9 +549,8 @@ void obsidianFlushDeletes() {
         if (affectedTags[j] == tags[i]) { seen = true; break; }
       if (!seen && tags[i].length()) affectedTags.push_back(tags[i]);
     } else if (r == GH_AUTH) {
-      break;                                     // bad creds -> stop, retry later
+      break;
     }
-    // GH_NET / GH_RATELIMIT / GH_OTHER: leave queued, retry next flush
   }
 
   for (size_t i = 0; i < affectedTags.size(); i++) {
@@ -465,7 +558,6 @@ void obsidianFlushDeletes() {
     buildAndPushTagMOC(affectedTags[i].c_str());
   }
 
-  // Rewrite the queue keeping only the unprocessed entries.
   bool anyLeft = false;
   for (size_t i = 0; i < uids.size(); i++) if (!done[i]) { anyLeft = true; break; }
   if (!anyLeft) { SD_MMC.remove(TOMBS_FILE); return; }
@@ -481,11 +573,11 @@ void obsidianFlushDeletes() {
   SD_MMC.rename(tmp, TOMBS_FILE);
 }
 
-// ── Public entry point ──────────────────────────────────────────────────────
+// ── Public entry point ─────────────────────────────────────────────────────
 void obsidianSyncAll() {
-  if (!cfg::hasGithub() || WiFi.status() != WL_CONNECTED) return;
+  if (!configGetGHEnabled() || WiFi.status() != WL_CONNECTED) return;
 
-  obsidianFlushDeletes();   // drain any queued vault deletes first
+  obsidianFlushDeletes();
 
   int pending = 0;
   for (int i = 0; i < (int)noteIndex.size(); i++)
@@ -493,6 +585,9 @@ void obsidianSyncAll() {
   if (pending == 0) return;
 
   int done = 0; bool pushedAny = false;
+  // Accumulate only the tags belonging to notes actually pushed this run.
+  std::vector<String> dirtyTags;
+
   for (int i = 0; i < (int)noteIndex.size(); i++) {
     if (!noteIndex[i].hasText || noteObsidianPushed(noteIndex[i].num)) continue;
     if (WiFi.status() != WL_CONNECTED) break;
@@ -507,13 +602,28 @@ void obsidianSyncAll() {
     String transcript = "";
     if (tf) { while (tf.available() && transcript.length() < 131072) transcript += (char)tf.read(); tf.close(); }
 
+    // Step 1: transcribe if we don't already have text
+    // (transcript file is written by record.cpp after recording; this path
+    //  handles notes that were saved without a transcription pass)
+    if (transcript.length() == 0) {
+      char wp[64]; snprintf(wp, sizeof(wp), "%s/note_%03d.wav", NOTES_DIR, num);
+      if (SD_MMC.exists(wp)) {
+        transcript = transcribeWav(wp);
+        if (transcript.length() > 0) {
+          // Persist so we don't re-transcribe on the next sync
+          File wf = SD_MMC.open(tp, FILE_WRITE);
+          if (wf) { wf.print(transcript); wf.close(); }
+        }
+      }
+    }
+
+    // Step 2: AI enrichment
     String title, summary, cleaned; std::vector<String> topics; NoteEvent evt;
-    bool aiOn = cfg::githubAiEnrich(), haveKey = cfg::hasOpenAiKey();
+    bool aiOn = configGetAIEnrich(), haveKey = configGetOpenAIKey().length() > 0;
     if (aiOn && haveKey) {
       bool ok = enrichNote(transcript, noteCreatedDeviceLabel(num),
                            title, summary, cleaned, topics, evt);
-      Serial.printf("[sync] note %d enrich=%d title='%s' sum=%d clean=%d\n",
-                    num, ok, title.c_str(), summary.length(), cleaned.length());
+      Serial.printf("[sync] note %d enrich=%d title='%s'\n", num, ok, title.c_str());
     } else {
       Serial.printf("[sync] note %d enrich SKIPPED (aiOn=%d haveKey=%d)\n", num, aiOn, haveKey);
     }
@@ -521,16 +631,13 @@ void obsidianSyncAll() {
       title = firstWords(transcript, 1);
       if (title.length() == 0) title = "Note";
     }
-    title = firstWords(title, 1);   // enforce a single-word topic title
+    title = firstWords(title, 1);
 
-    // Vault filename = the note's one-word title (e.g. Soho.md), with a numeric
-    // suffix if that name is already taken (Soho 2.md). A re-push keeps whatever
-    // filename it already got. Frozen into .meta on success for the MOC/delete paths.
     String stored = readNoteMetaValue(num, "uid");
     String slug = stored.length() ? stored : pickVaultStem(num, title);
     String md = buildNoteMarkdown(num, slug, transcript, cleaned, title, summary, topics, userTag, createdUtc, evt);
     String fname = slug + ".md";
-    String path = cfg::githubDir() + "/" + fname;
+    String path = configGetGHDir() + "/" + fname;
 
     GhResult r = GH_NET;
     for (int attempt = 0; attempt < 3 && WiFi.status() == WL_CONNECTED; attempt++) {
@@ -538,21 +645,28 @@ void obsidianSyncAll() {
       if (r == GH_OK || r == GH_AUTH) break;
       delay(1500);
     }
-    if (r == GH_OK)            { freezeVaultMeta(num, slug, title); markNoteObsidianPushed(num, true); done++; pushedAny = true; }
-    else if (r == GH_AUTH)     { showError("GIT AUTH"); delay(1600); return; }
-    else if (r == GH_RATELIMIT){ Serial.println("[gh] rate limited; stopping"); break; }
-    // GH_NET / GH_OTHER: leave pending, try the next note
-  }
-
-  // Regenerate MOCs for every non-empty tag (cheap, <=20 tags) when we pushed ≥1 note.
-  if (pushedAny) {
-    for (int t = 0; t < tagCount; t++) {
-      if (WiFi.status() != WL_CONNECTED) break;
-      bool any = false;
-      for (int i = 0; i < (int)noteIndex.size(); i++)
-        if (noteIndex[i].hasText && strcmp(noteIndex[i].tag, tags[t]) == 0) { any = true; break; }
-      if (any) buildAndPushTagMOC(tags[t]);
+    if (r == GH_OK) {
+      freezeVaultMeta(num, slug, title);
+      markNoteObsidianPushed(num, true);
+      done++; pushedAny = true;
+      // Track dirty tags — only rebuild MOCs for these
+      bool seen = false;
+      for (size_t j = 0; j < dirtyTags.size(); j++)
+        if (dirtyTags[j] == userTag) { seen = true; break; }
+      if (!seen) dirtyTags.push_back(userTag);
+    } else if (r == GH_AUTH) {
+      showError("GIT AUTH"); delay(1600); return;
+    } else if (r == GH_RATELIMIT) {
+      Serial.println("[gh] rate limited; stopping"); break;
     }
   }
-  Serial.printf("[gh] synced %d/%d notes\n", done, pending);
+
+  // Rebuild MOCs only for tags that had new notes this run (was: all tags every time)
+  if (pushedAny) {
+    for (size_t t = 0; t < dirtyTags.size(); t++) {
+      if (WiFi.status() != WL_CONNECTED) break;
+      buildAndPushTagMOC(dirtyTags[t].c_str());
+    }
+  }
+  Serial.printf("[gh] synced %d/%d notes, rebuilt %d MOC(s)\n", done, pending, (int)dirtyTags.size());
 }

@@ -16,14 +16,17 @@
 #include "mbedtls/ssl.h"
 
 // ============================================================
-// network.cpp — Amar Note Wi-Fi, portal, transcription, GitHub sync
+// network.cpp — Amar Note Wi-Fi, captive portal, OTA
+// ============================================================
+// NOTE: Voice transcription (Whisper / Groq) now lives entirely in
+// obsidian.cpp which owns the note-sync pipeline. The old dead-code
+// whisperTranscribe / networkDrainQueue path has been removed.
 // ============================================================
 
 static WebServer server(80);
 static bool      wifiConnected = false;
-static QueueHandle_t transcribeQueue = nullptr;
 
-// --- Mozilla CA bundle (truncated representative root) ---
+// --- Mozilla CA bundle ---
 extern const uint8_t mozilla_ca_bundle[] asm("_binary_ca_bundle_pem_start");
 extern const uint8_t mozilla_ca_bundle_end[] asm("_binary_ca_bundle_pem_end");
 
@@ -69,40 +72,162 @@ static const char PORTAL_HTML[] PROGMEM = R"HTML(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Amar Note — Setup</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:480px;margin:2rem auto;padding:0 1rem;background:#f7f6f2;color:#28251d}
-h1{font-size:1.4rem;margin-bottom:1.5rem}
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem 3rem;background:#f7f6f2;color:#28251d}
+h1{font-size:1.4rem;margin-bottom:.3rem}
+.tagline{font-size:.85rem;color:#7a7974;margin-bottom:1.8rem}
+/* sections */
+.section{background:#fff;border:1px solid #dcd9d5;border-radius:10px;padding:1.2rem 1.2rem 1rem;margin-bottom:1.2rem}
+.section-title{font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#7a7974;margin-bottom:.9rem}
+/* labels / inputs */
 label{display:block;font-size:.85rem;margin:.8rem 0 .2rem;font-weight:500}
-input[type=text],input[type=password]{width:100%;box-sizing:border-box;padding:.5rem .6rem;
-  border:1px solid #d4d1ca;border-radius:6px;font-size:1rem;background:#fff}
-.cb{display:flex;align-items:center;gap:.5rem;margin:.6rem 0}
-button{width:100%;margin-top:1.5rem;padding:.7rem;background:#01696f;color:#fff;
-  border:none;border-radius:8px;font-size:1rem;cursor:pointer}
-button:hover{background:#0c4e54}
-.note{font-size:.8rem;color:#7a7974;margin-top:.4rem}
+label span.opt{font-weight:400;color:#7a7974;margin-left:.3rem;font-size:.8rem}
+input[type=text],input[type=password],select{width:100%;padding:.5rem .6rem;
+  border:1px solid #d4d1ca;border-radius:6px;font-size:.95rem;background:#fff;color:#28251d}
+input:focus,select:focus{outline:2px solid #01696f;border-color:#01696f}
+/* help text */
+.help{font-size:.78rem;color:#7a7974;margin:.25rem 0 0;line-height:1.45}
+.help a{color:#01696f;text-decoration:none}
+.help a:hover{text-decoration:underline}
+/* checkbox rows */
+.cb{display:flex;align-items:center;gap:.5rem;margin:.7rem 0}
+.cb label{margin:0;font-weight:400}
+/* submit */
+.submit-wrap{margin-top:1.5rem}
+button[type=submit]{width:100%;padding:.75rem;background:#01696f;color:#fff;
+  border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer}
+button[type=submit]:hover{background:#0c4e54}
+.footer-note{font-size:.78rem;color:#7a7974;text-align:center;margin-top:.8rem}
+/* provider badge */
+.badge{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .45rem;
+  border-radius:4px;margin-left:.4rem;vertical-align:middle}
+.badge-free{background:#d4efdd;color:#1a6b38}
+.badge-paid{background:#fde8cc;color:#7a3a00}
 </style>
 </head>
 <body>
-<h1>🎙️ Amar Note — Setup</h1>
+<h1>&#127897; Amar Note &mdash; Setup</h1>
+<p class="tagline">Connect to your phone&rsquo;s Wi-Fi and configure your cloud services below.</p>
+
 <form method="POST" action="/provision">
-<label>Wi-Fi network (SSID)</label>
-<input type="text" name="ssid" placeholder="Your 2.4 GHz Wi-Fi name">
-<label>Wi-Fi password</label>
-<input type="password" name="pass" placeholder="Leave blank to keep current">
-<label>OpenAI API key</label>
-<input type="text" name="openai" placeholder="sk-...">
-<label>GitHub repo (owner/name)</label>
-<input type="text" name="repo" placeholder="yourname/Notes">
-<label>Branch</label>
-<input type="text" name="branch" placeholder="main">
-<label>Vault folder</label>
-<input type="text" name="dir" placeholder="VoiceNotes">
-<label>GitHub token</label>
-<input type="text" name="token" placeholder="github_pat_...">
-<div class="cb"><input type="checkbox" name="gh_en" id="gh_en" checked><label for="gh_en" style="margin:0">Enable GitHub sync</label></div>
-<div class="cb"><input type="checkbox" name="ai_en" id="ai_en" checked><label for="ai_en" style="margin:0">AI titles + topic links</label></div>
-<button type="submit">Save &amp; reboot</button>
+
+<!-- ── Wi-Fi ── -->
+<div class="section">
+  <div class="section-title">Wi-Fi</div>
+  <label>Network name (SSID)
+    <span class="opt">2.4 GHz only</span>
+  </label>
+  <input type="text" name="ssid" placeholder="Your Wi-Fi name" autocomplete="off">
+  <label>Password</label>
+  <input type="password" name="pass" placeholder="Leave blank to keep current" autocomplete="off">
+  <p class="help">Amar Note connects only to 2.4 GHz networks. 5 GHz SSIDs will not work.</p>
+</div>
+
+<!-- ── Speech-to-Text ── -->
+<div class="section">
+  <div class="section-title">Speech-to-Text (Transcription)</div>
+
+  <label>Provider</label>
+  <select name="stt_provider" id="stt_provider" onchange="onProviderChange()">
+    <option value="0">OpenAI Whisper <span class="badge badge-paid">Paid</span></option>
+    <option value="1">Groq Whisper &mdash; free tier <span class="badge badge-free">Free</span></option>
+  </select>
+  <p class="help" id="help_stt_openai">
+    OpenAI charges ~$0.006 per minute of audio.
+    <a href="https://platform.openai.com/signup" target="_blank" rel="noopener">Create an OpenAI account</a>,
+    then go to <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">API Keys</a>
+    to generate a key starting with <code>sk-</code>.
+  </p>
+  <p class="help" id="help_stt_groq" style="display:none">
+    Groq is <strong>free</strong> (up to 2 hrs of audio per day) and faster than OpenAI.
+    <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Create a free Groq account</a>
+    and generate a key starting with <code>gsk_</code>.
+  </p>
+
+  <div id="wrap_openai_key">
+    <label>OpenAI API key <span class="badge badge-paid">Paid</span></label>
+    <input type="text" name="openai" placeholder="sk-..." autocomplete="off">
+    <p class="help">
+      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>
+    </p>
+  </div>
+
+  <div id="wrap_groq_key" style="display:none">
+    <label>Groq API key <span class="badge badge-free">Free</span></label>
+    <input type="text" name="groq" placeholder="gsk_..." autocomplete="off">
+    <p class="help">
+      <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>
+      &mdash; Model used: <code>whisper-large-v3-turbo</code>
+    </p>
+  </div>
+
+  <div class="cb">
+    <input type="checkbox" name="ai_en" id="ai_en" checked>
+    <label for="ai_en">AI titles &amp; topic links (uses OpenAI GPT-4o-mini &mdash; separate from transcription)</label>
+  </div>
+  <p class="help">
+    AI enrichment always uses OpenAI regardless of the transcription provider.
+    If you&rsquo;re using Groq for transcription you still need an OpenAI key for this feature,
+    or uncheck it above.
+  </p>
+</div>
+
+<!-- ── GitHub ── -->
+<div class="section">
+  <div class="section-title">GitHub / Obsidian Vault Sync <span class="opt" style="text-transform:none;letter-spacing:0">(optional)</span></div>
+
+  <div class="cb">
+    <input type="checkbox" name="gh_en" id="gh_en" checked>
+    <label for="gh_en">Enable GitHub sync</label>
+  </div>
+
+  <p class="help">
+    Notes are pushed as Markdown files to a GitHub repo so Obsidian can read them.
+    You need a free GitHub account and a Personal Access Token (PAT) with
+    <strong>repo</strong> scope.
+    <a href="https://github.com/signup" target="_blank" rel="noopener">Create a GitHub account</a>
+    &mdash;
+    <a href="https://github.com/settings/tokens/new?description=AmarNote&scopes=repo" target="_blank" rel="noopener">Generate a PAT</a>
+    (select the <code>repo</code> checkbox, then copy the token starting with <code>github_pat_</code>).
+  </p>
+
+  <label>Repo <span class="opt">owner/name</span></label>
+  <input type="text" name="repo" placeholder="yourname/Notes" autocomplete="off">
+  <p class="help">Create a <strong>private</strong> repo first at
+    <a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>.
+  </p>
+
+  <label>Branch <span class="opt">default: main</span></label>
+  <input type="text" name="branch" placeholder="main">
+
+  <label>Vault folder <span class="opt">subfolder inside the repo</span></label>
+  <input type="text" name="dir" placeholder="VoiceNotes">
+
+  <label>GitHub Personal Access Token</label>
+  <input type="text" name="token" placeholder="github_pat_..." autocomplete="off">
+  <p class="help">
+    <a href="https://github.com/settings/tokens/new?description=AmarNote&scopes=repo" target="_blank" rel="noopener">github.com &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens</a>
+  </p>
+</div>
+
+<div class="submit-wrap">
+  <button type="submit">Save &amp; reboot</button>
+  <p class="footer-note">Amar Note will restart and connect using the saved settings. Leave any field blank to keep its current value.</p>
+</div>
+
 </form>
-<p class="note">Leave any field blank to keep its current value.</p>
+
+<script>
+function onProviderChange() {
+  var v = document.getElementById('stt_provider').value;
+  var isGroq = v === '1';
+  document.getElementById('wrap_openai_key').style.display = isGroq ? 'none' : '';
+  document.getElementById('wrap_groq_key').style.display   = isGroq ? '' : 'none';
+  document.getElementById('help_stt_openai').style.display = isGroq ? 'none' : '';
+  document.getElementById('help_stt_groq').style.display   = isGroq ? '' : 'none';
+}
+</script>
+
 </body>
 </html>
 )HTML";
@@ -120,6 +245,8 @@ static void handleProvision() {
     if (arg("ssid").length())   configSetSSID(arg("ssid"));
     if (arg("pass").length())   configSetPass(arg("pass"));
     if (arg("openai").length()) configSetOpenAIKey(arg("openai"));
+    if (arg("groq").length())   configSetGroqKey(arg("groq"));
+    configSetSttProvider((uint8_t)arg("stt_provider").toInt());
     if (arg("repo").length())   configSetGHRepo(arg("repo"));
     if (arg("branch").length()) configSetGHBranch(arg("branch"));
     if (arg("dir").length())    configSetGHDir(arg("dir"));
@@ -128,125 +255,50 @@ static void handleProvision() {
     configSetAIEnrich(server.hasArg("ai_en"));
 
     server.send(200, "text/html",
-        "<h2>Saved! Rebooting…</h2>"
-        "<p>Reconnect to your Wi-Fi. Visit <b>http://&lt;device-ip&gt;/provision</b> to edit later.</p>");
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Saved</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:420px;margin:3rem auto;"
+        "padding:0 1rem;background:#f7f6f2;color:#28251d;text-align:center}"
+        "h2{color:#01696f}p{color:#7a7974;margin-top:.5rem}</style></head>"
+        "<body><h2>&#10003; Settings saved</h2>"
+        "<p>Amar Note is rebooting and will connect to your Wi-Fi&hellip;</p>"
+        "</body></html>");
     delay(800);
     ESP.restart();
 }
 
-static void handleOTA() {
-    server.send(200, "text/html",
-        "<h2>Amar Note OTA</h2>"
-        "<form method=POST action=/ota_upload enctype=multipart/form-data>"
-        "<input type=file name=firmware accept=.bin>"
-        "<button>Flash</button></form>");
-}
+// ---- Wi-Fi STA ----
 
-// ---- Public API ----
-
-void networkInit() {
-    transcribeQueue = xQueueCreate(8, sizeof(char)*128);
-
-    server.on("/",         HTTP_GET,  handleRoot);
-    server.on("/provision",HTTP_GET,  handleRoot);
-    server.on("/provision",HTTP_POST, handleProvision);
-    server.on("/ota",      HTTP_GET,  handleOTA);
-    server.begin();
-    Serial.println("[network] portal started");
-
+bool networkConnectWifi() {
     String ssid = configGetSSID();
     String pass = configGetPass();
-    if (ssid.length() > 0) {
-        WiFi.begin(ssid.c_str(), pass.c_str());
-        uint32_t t = millis();
-        while (WiFi.status() != WL_CONNECTED && millis()-t < 12000) delay(200);
-        wifiConnected = (WiFi.status() == WL_CONNECTED);
-        if (wifiConnected)
-            Serial.printf("[network] Wi-Fi connected, IP %s\n",
-                          WiFi.localIP().toString().c_str());
-        else
-            Serial.println("[network] Wi-Fi failed, portal still up");
-    }
+    if (!ssid.length()) return false;
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    uint32_t t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) delay(200);
+    wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected) Serial.printf("[net] WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+    else               Serial.println("[net] WiFi connect failed");
+    return wifiConnected;
 }
 
-void networkService() { server.handleClient(); }
+// ---- SoftAP captive portal ----
+
+void networkStartPortal() {
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(SETUP_SSID);
+    server.on("/",          HTTP_GET,  handleRoot);
+    server.on("/provision", HTTP_POST, handleProvision);
+    server.onNotFound([](){ server.sendHeader("Location","/"); server.send(302); });
+    server.begin();
+    Serial.printf("[net] Portal started: SSID=%s IP=%s\n",
+                  SETUP_SSID, WiFi.softAPIP().toString().c_str());
+}
+
+void networkLoop() {
+    server.handleClient();
+}
+
 bool networkIsConnected() { return wifiConnected; }
-
-void networkEnqueueTranscribe(const char* path) {
-    char buf[128];
-    strncpy(buf, path, sizeof(buf)-1);
-    buf[sizeof(buf)-1] = '\0';
-    xQueueSend(transcribeQueue, buf, 0);
-}
-
-// ---- Transcription + enrichment (blocking, call from loop when idle) ----
-
-static String whisperTranscribe(const char* wavPath) {
-    File f = SD_MMC.open(wavPath);
-    if (!f) return "";
-    size_t sz = f.size();
-    uint8_t* buf = (uint8_t*)malloc(sz);
-    if (!buf) { f.close(); return ""; }
-    f.read(buf, sz);
-    f.close();
-
-    WiFiClientSecure client;
-    client.setCACert((const char*)mozilla_ca_bundle);
-
-    HTTPClient http;
-    http.begin(client, "https://api.openai.com/v1/audio/transcriptions");
-    http.addHeader("Authorization", "Bearer " + configGetOpenAIKey());
-
-    // Multipart
-    String boundary = "----AmarNoteBoundary";
-    String head = "--" + boundary + "\r\n"
-        "Content-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n"
-        "--" + boundary + "\r\n"
-        "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
-        "Content-Type: audio/wav\r\n\r\n";
-    String tail = "\r\n--" + boundary + "--\r\n";
-
-    http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-    uint8_t* body = (uint8_t*)malloc(head.length() + sz + tail.length());
-    if (!body) { free(buf); return ""; }
-    memcpy(body,                    head.c_str(), head.length());
-    memcpy(body + head.length(),    buf,          sz);
-    memcpy(body + head.length()+sz, tail.c_str(), tail.length());
-    free(buf);
-
-    int code = http.POST(body, head.length() + sz + tail.length());
-    free(body);
-
-    String result;
-    if (code == 200) {
-        // Handle chunked transfer
-        WiFiClient* stream = http.getStreamPtr();
-        String raw;
-        uint32_t deadline = millis() + 30000;
-        while (millis() < deadline) {
-            if (stream->available()) {
-                raw += (char)stream->read();
-            } else if (!http.connected()) break;
-            else delay(1);
-        }
-        StaticJsonDocument<2048> doc;
-        if (!deserializeJson(doc, raw))
-            result = doc["text"].as<String>();
-    } else {
-        Serial.printf("[network] Whisper error %d\n", code);
-    }
-    http.end();
-    return result;
-}
-
-void networkDrainQueue() {
-    char path[128];
-    while (xQueueReceive(transcribeQueue, path, 0) == pdTRUE) {
-        Serial.printf("[network] transcribing %s\n", path);
-        String transcript = whisperTranscribe(path);
-        if (transcript.length() == 0) continue;
-
-        // TODO: enrichment + GitHub push (Phase 2)
-        Serial.printf("[network] transcript: %s\n", transcript.c_str());
-    }
-}

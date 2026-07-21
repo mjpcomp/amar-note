@@ -25,8 +25,16 @@ void   configSetSSID(const String& v) { prefs.putString("wifi_ssid", v); }
 void   configSetPass(const String& v) { prefs.putString("wifi_pass", v); }
 
 // OpenAI
-String configGetOpenAIKey()           { return prefs.getString("openai_key", ""); }
+String configGetOpenAIKey()                { return prefs.getString("openai_key", ""); }
 void   configSetOpenAIKey(const String& v) { prefs.putString("openai_key", v); }
+
+// Groq free-tier STT
+String configGetGroqKey()                { return prefs.getString("groq_key", ""); }
+void   configSetGroqKey(const String& v) { prefs.putString("groq_key", v); }
+
+// STT provider: 0 = OpenAI Whisper, 1 = Groq Whisper
+uint8_t configGetSttProvider()               { return (uint8_t)prefs.getUChar("stt_provider", 0); }
+void    configSetSttProvider(uint8_t v)      { prefs.putUChar("stt_provider", v); }
 
 // GitHub
 String configGetGHRepo()    { return prefs.getString("gh_repo",   ""); }
@@ -45,5 +53,6 @@ void configSetAIEnrich(bool v)          { prefs.putBool("ai_enrich",   v); }
 
 // Convenience: did the user complete first-time setup?
 bool configIsProvisioned() {
-    return configGetSSID().length() > 0 && configGetOpenAIKey().length() > 0;
+    return configGetSSID().length() > 0 &&
+           (configGetOpenAIKey().length() > 0 || configGetGroqKey().length() > 0);
 }
