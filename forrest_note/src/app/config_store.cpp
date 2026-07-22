@@ -12,15 +12,25 @@ namespace {
     if (!s || s[0] == '\0') return true;
     return strspn(s, ".") == strlen(s);
   }
+
+  // Validated Groq model IDs for AI enrichment.
+  // Keep in sync with the portal dropdown in network.cpp.
+  const char* const GROQ_ENRICH_MODELS[] = {
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama-4-scout-17b-16e-instruct"
+  };
+  const int GROQ_ENRICH_MODEL_COUNT = 3;
+  const char* GROQ_ENRICH_DEFAULT   = "llama-3.3-70b-versatile";
 }
 
 namespace cfg {
 
 void begin() {
   prefs.begin(NS, false);
-  // One-time migration: seed NVS from compiled secrets.h only for real (non-
-  // placeholder) values that aren't already stored. After this, secrets live in
-  // NVS and can be rotated at runtime without reflashing.
+
+  // One-time migration: seed NVS from compiled secrets.h only for real
+  // (non-placeholder) values that aren't already stored.
   if (!prefs.isKey("ssid") && !isPlaceholder(WIFI_SSID)) {
     prefs.putString("ssid", WIFI_SSID);
     prefs.putString("pass", WIFI_PASS);
@@ -29,18 +39,28 @@ void begin() {
     prefs.putString("oaikey", OPENAI_KEY);
   }
 
-  // One-time correction (cfgv=1): force AI-enrich back on if it was ever
-  // inadvertently cleared by an older portal save with the box unchecked.
+  // cfgv=1: force AI-enrich back on if it was ever inadvertently cleared.
   if (!prefs.isKey("cfgv")) {
     prefs.putBool("ghai", true);
     prefs.putUInt("cfgv", 1);
   }
+
+  // cfgv=2: auto-default enrichment provider.
+  // If a Groq key already exists and no enrichment provider has been chosen
+  // yet, pre-select Groq so existing Groq users get the free path immediately.
+  if (!prefs.isKey("enrichprov")) {
+    uint8_t def = (groqKey().length() > 0) ? 1 : 0;
+    prefs.putUChar("enrichprov", def);
+  }
+  if (!prefs.isKey("enrichmdl")) {
+    prefs.putString("enrichmdl", GROQ_ENRICH_DEFAULT);
+  }
 }
 
-String wifiSsid()  { return prefs.getString("ssid",    ""); }
-String wifiPass()  { return prefs.getString("pass",    ""); }
-String openaiKey() { return prefs.getString("oaikey",  ""); }
-String groqKey()   { return prefs.getString("groqkey", ""); }
+String  wifiSsid()  { return prefs.getString("ssid",    ""); }
+String  wifiPass()  { return prefs.getString("pass",    ""); }
+String  openaiKey() { return prefs.getString("oaikey",  ""); }
+String  groqKey()   { return prefs.getString("groqkey", ""); }
 
 uint8_t sttProvider() { return (uint8_t)prefs.getUChar("sttprov", 0); }
 
@@ -68,8 +88,35 @@ bool setGroqKey(const String& key) {
 
 void setSttProvider(uint8_t p) { prefs.putUChar("sttprov", p); }
 
-// ── GitHub / Obsidian vault ─────────────────────────────────────────────────
-// NVS keys must be <=15 chars.
+// ── AI enrichment ────────────────────────────────────────────────────────────
+
+uint8_t enrichProvider() {
+  return (uint8_t)prefs.getUChar("enrichprov", 0);
+}
+
+String enrichModel() {
+  String m = prefs.getString("enrichmdl", GROQ_ENRICH_DEFAULT);
+  // Validate — reject anything not in the allowlist.
+  for (int i = 0; i < GROQ_ENRICH_MODEL_COUNT; i++)
+    if (m == GROQ_ENRICH_MODELS[i]) return m;
+  return String(GROQ_ENRICH_DEFAULT);
+}
+
+void setEnrichProvider(uint8_t p) { prefs.putUChar("enrichprov", p); }
+
+void setEnrichModel(const String& model) {
+  // Only store validated model IDs.
+  for (int i = 0; i < GROQ_ENRICH_MODEL_COUNT; i++) {
+    if (model == GROQ_ENRICH_MODELS[i]) {
+      prefs.putString("enrichmdl", model);
+      return;
+    }
+  }
+  // Silently ignore unknown values.
+}
+
+// ── GitHub / Obsidian vault ──────────────────────────────────────────────────
+
 String githubToken()  { return prefs.getString("ghtok",    ""); }
 String githubRepo()   { return prefs.getString("ghrepo",   ""); }
 String githubBranch() { String b = prefs.getString("ghbranch", ""); return b.length() ? b : "main"; }
