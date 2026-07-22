@@ -16,6 +16,10 @@ extern "C" {
 #include "../../src/audio/audio_bsp.h"
 }
 
+// Flag set by the main loop (STATE_RECORDING + EV_SINGLE) to stop recording.
+// The producer task and the consumer drain loop both observe this.
+volatile bool g_stopRecording = false;
+
 // Amar Note — audio capture (producer) and SD-write (consumer) run on separate
 // cores connected by a PSRAM ring buffer. The producer keeps draining the I2S
 // DMA at line rate so a slow SD write only grows the ring instead of dropping samples.
@@ -85,9 +89,11 @@ bool record() {
     return true;
   };
 
+  // Record until tap-to-stop (g_stopRecording set by STATE_RECORDING EV_SINGLE)
+  // or the hard MAX_REC_MS cap is hit.  1-second minimum enforced so accidental
+  // double-taps do not produce empty files.
   uint32_t lastUi = 0;
-  while ((digitalRead(BTN_REC) == LOW || millis() - t0 < 500) &&
-         (millis() - t0 < MAX_REC_MS)) {
+  while (!g_stopRecording && (millis() - t0 < MAX_REC_MS)) {
     drain(pdMS_TO_TICKS(40));
     uint32_t now = millis();
     if (now - lastUi >= 100) {
@@ -143,7 +149,7 @@ bool playWavFile(const char* path) {
   audioPlaying  = true;
   stopPlayback  = false;
 
-  palaSoundSetEnabled(false);
+  amarSoundSetEnabled(false);
   audio_playback_set_vol(85);
 
   while (f.available() && !stopPlayback) {
@@ -170,7 +176,7 @@ bool playWavFile(const char* path) {
   }
 
   audio_playback_set_vol(0);
-  palaSoundSetEnabled(true);
+  amarSoundSetEnabled(true);
 
   heap_caps_free(monoBuf);
   heap_caps_free(stereoBuf);

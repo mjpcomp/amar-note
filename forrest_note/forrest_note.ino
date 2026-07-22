@@ -109,6 +109,7 @@ void startRecordFlow() {
   showRecording();
 
   amarSoundSetEnabled(false);
+  g_stopRecording = false;
   bool recOk = record();
   amarSoundSetEnabled(true);
 
@@ -423,7 +424,13 @@ void loop() {
   }
 
   if (state == STATE_IDLE) {
-    if (handleIdleRec()) return;
+    // Tap-to-start: EV_SINGLE on rec fires startRecordFlow() immediately with no hold wait.
+    ButtonEvent recEv = readButtonEvent(BTN_REC);
+    if (recEv == EV_SINGLE) {
+      g_stopRecording = false;
+      startRecordFlow();
+      return;
+    }
 
     ButtonEvent pwr = readButtonEvent(BTN_PWR);
     if (pwr == EV_SINGLE || pwr == EV_LONG) {
@@ -431,6 +438,14 @@ void loop() {
       menuCursor = 0;
       state = STATE_MENU;
       showMenu(menuCursor);
+    }
+  }
+
+  else if (state == STATE_RECORDING) {
+    // Tap-to-stop: EV_SINGLE on rec during recording sets the stop flag consumed by record().
+    ButtonEvent recEv = readButtonEvent(BTN_REC);
+    if (recEv == EV_SINGLE) {
+      g_stopRecording = true;
     }
   }
 
