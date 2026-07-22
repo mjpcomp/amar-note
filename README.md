@@ -159,15 +159,21 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
 
 ## 🎛️ Using it
 
+Two physical buttons control everything: **record** (GPIO0 / BOOT) and **power** (GPIO18).
+A **tap** is any press released before the long-hold threshold (~450 ms); a **long-hold** crosses that threshold and fires immediately — no need to release first.
+
 | Action | Control |
 |---|---|
-| **Record a note** | Tap **record** (instant — no hold needed) |
+| **Record a note** | Tap **record** |
 | **Stop recording** | Tap **record** again |
-| **Scroll / next** | Tap **power** |
-| **Select / open** | Hold **record** briefly |
-| **Back** | Long-hold **power** |
+| **Scroll / next item** | Tap **power** |
+| **Select / open** | Tap **record** |
+| **Back** | Long-hold **record** |
+| **Play back a recording** | Tap **record** while viewing a note |
 | **Delete a note** | Long-hold **power** while viewing a note |
 | **Erase all notes** | **Settings → Erase All** |
+| **Wake to menu** | Hold **power** while powering on |
+| **Wake straight to record** | Hold **record** while powering on |
 
 ---
 
