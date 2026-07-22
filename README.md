@@ -2,7 +2,7 @@
 
 **A pocket voice-note device that records your voice, transcribes it, and uses AI to turn rambling speech into clean, coherent notes — synced straight to a GitHub repo and ready for Obsidian.**
 
-Hold a button, talk, let go. A few seconds later a tidy Markdown note — with an AI-written title, a one-line summary, and a cleaned-up body — appears in your notes vault. The raw transcript is always preserved, too.
+Tap a button, talk, tap again. A few seconds later a tidy Markdown note — with an AI-written title, a one-line summary, and a cleaned-up body — appears in your notes vault. The raw transcript is always preserved, too.
 
 ---
 
@@ -13,7 +13,7 @@ Hold a button, talk, let go. A few seconds later a tidy Markdown note — with a
 - **AI note cleanup (the headline upgrade):** a language model rewrites your messy, filler-filled speech into **coherent, succinct prose**, generates a **title**, a **one-sentence summary**, and **topic links** — automatically, every time you sync.
 - **Verbatim safety net:** the original raw transcript is tucked into a foldable callout, so nothing you said is ever lost.
 - **Syncs to GitHub** as clean Markdown with YAML frontmatter and tags — drop it into **Obsidian** and your notes organise themselves.
-- **No app, no account lock-in, no cloud middleman** — it talks directly to your chosen STT provider and to *your* GitHub repo.
+- **No app, no account lock-in, no cloud middleman** — it talks directly to your chosen STT and enrichment providers and to *your* GitHub repo.
 
 ---
 
@@ -53,6 +53,7 @@ Credit where it's due — the original firmware already provided: voice **record
 |---|---|---|
 | 🎨 **Rebrand** | 🔁 Changed | All user-facing strings, portal pages, hotspot name (`AmarNote-Setup`), boot banner, and sleep-screen logo updated to Amar Note. |
 | 🎤 **Groq STT (free tier)** | ➕ New | Optional Groq `whisper-large-v3-turbo` transcription — no credit card needed. Switch providers in the portal. |
+| 🤖 **Selectable AI enrichment backend** | ➕ New | AI note cleanup can use **OpenAI `gpt-4o-mini`** (default) or any of three **Groq Llama models** (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `llama-4-scout-17b-16e-instruct`). Switch provider and model in the portal — no reflash needed. |
 | 🗂️ **Portal provider links** | ➕ New | Setup page now shows direct links to OpenAI, Groq, and GitHub PAT pages. |
 | ⏱️ **POSIX timezone** | 🔁 Changed | Replaced the vestigial `LOCAL_TIME_OFFSET_MIN` constant with a proper DST-aware POSIX TZ string (`DEVICE_TZ_POSIX`). Note timestamps and calendar events now reflect real local time. |
 | 🔌 **Correct hardware pins** | 🔁 Changed | All EPD SPI, I2C, power-control, and button pins corrected to the official Waveshare ESP32-S3-ePaper-1.54 definitions. |
@@ -85,10 +86,12 @@ The printable enclosure is the original creator's hardware design — download f
 ## 📋 What you'll need
 
 1. Assembled Waveshare ESP32-S3 1.54″ e-Paper board + USB-C cable.
-2. An **OpenAI API key** (for AI enrichment) — <https://platform.openai.com/api-keys>.
-3. *(Optional)* A **Groq API key** (free, for Whisper transcription) — <https://console.groq.com/keys>.
+2. *(For AI enrichment with OpenAI)* An **OpenAI API key** — <https://platform.openai.com/api-keys>.
+3. *(Optional, free alternative for both STT and enrichment)* A **Groq API key** — <https://console.groq.com/keys>.
 4. A **GitHub repo** for notes + a fine-grained PAT with **Contents: Read and write** — <https://github.com/settings/tokens>.
 5. Your **2.4 GHz Wi-Fi** name + password.
+
+> **Minimum API requirement:** you need at least one of an OpenAI key or a Groq key. Groq's free tier covers both transcription (`whisper-large-v3-turbo`) and enrichment (Llama models) with no credit card required.
 
 ---
 
@@ -151,9 +154,11 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
 1. Power on. With no Wi-Fi stored, device broadcasts **`AmarNote-Setup`**.
 2. Connect phone/laptop to `AmarNote-Setup`.
 3. Open browser to **`http://192.168.4.1`**.
-4. Fill in Wi-Fi credentials, OpenAI key, GitHub repo/token, vault folder.
-5. *(Optional)* Enter a **Groq API key** and set **STT Provider** to **Groq** for free Whisper transcription.
-6. Enable sync and AI enrichment. Tap **Save**. Device reboots onto your Wi-Fi.
+4. Fill in Wi-Fi credentials, GitHub repo/token, and vault folder.
+5. Enter your **OpenAI API key** and/or **Groq API key** depending on which providers you want to use.
+6. Set **STT Provider**: **OpenAI** (whisper-1) or **Groq** (whisper-large-v3-turbo, free).
+7. Set **Enrichment Provider**: **OpenAI** (gpt-4o-mini) or **Groq** (Llama — select model).
+8. Enable sync and AI enrichment. Tap **Save**. Device reboots onto your Wi-Fi.
 
 ---
 
@@ -180,7 +185,13 @@ A **tap** is any press released before the long-hold threshold (~450 ms); a **lo
 ## 🤖 How the AI pipeline works
 
 1. **Transcribes** audio with **Whisper** — either OpenAI (`whisper-1`) or Groq (`whisper-large-v3-turbo`, free tier). Set your preference in the portal.
-2. **Enriches** with **`gpt-4o-mini`**: topic title, summary, cleaned body, tags, calendar event.
+2. **Enriches** the transcript using your chosen provider:
+   - **OpenAI** — `gpt-4o-mini` (requires an OpenAI key with chat access).
+   - **Groq** — one of three Llama models (free tier, no credit card):
+     - `llama-3.3-70b-versatile` *(default — best quality, 30 RPM)*
+     - `llama-3.1-8b-instant` *(fastest/lightest, 30 RPM)*
+     - `llama-4-scout-17b-16e-instruct` *(newer model, 15 RPM)*
+   - Enrichment produces: topic **title**, one-line **summary**, cleaned **body**, **tags**, and any **calendar events**.
 3. **Writes Markdown** and **pushes** to your GitHub repo. Only tag index files whose tag set changed are rewritten.
 
 Example output:
@@ -215,7 +226,21 @@ I'm heading to Soho House tomorrow at seven...
 ## ⚙️ Configuration reference
 
 All runtime config lives in NVS (namespace **`amar`**) and is set via the portal — never in code:
-`WIFI_SSID`, `WIFI_PASS`, `OPENAI_KEY`, `GROQ_KEY`, `STT_PROVIDER` (0 = OpenAI, 1 = Groq), `repo`, `branch`, `dir`, `token`, `enabled`, `ai-enrich`.
+
+| NVS key | Values | Description |
+|---|---|---|
+| `WIFI_SSID` / `WIFI_PASS` | string | Wi-Fi credentials |
+| `OPENAI_KEY` | string | OpenAI API key |
+| `GROQ_KEY` | string | Groq API key |
+| `STT_PROVIDER` | `0` = OpenAI, `1` = Groq | Speech-to-text provider |
+| `ENRICH_PROVIDER` | `0` = OpenAI, `1` = Groq | AI enrichment (note cleanup) provider |
+| `ENRICH_MODEL` | Groq model ID string | Enrichment model when provider is Groq. One of: `llama-3.3-70b-versatile` (default), `llama-3.1-8b-instant`, `llama-4-scout-17b-16e-instruct`. Ignored when provider is OpenAI (always uses `gpt-4o-mini`). |
+| `repo` | `owner/repo` | GitHub repo for notes |
+| `branch` | string | GitHub branch (default `main`) |
+| `dir` | string | Vault folder path in repo |
+| `token` | string | GitHub fine-grained PAT |
+| `enabled` | bool | GitHub sync on/off |
+| `ai-enrich` | bool | AI enrichment on/off |
 
 Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default is US Pacific (`PST8PDT,M3.2.0,M11.1.0`). Common alternatives are documented inline in `config.h`.
 
@@ -226,10 +251,11 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 - **Device won't stay on USB for flashing** → hold BOOT button while plugging in and through the write.
 - **Build error about duplicate `.cpp`** → delete any `* 2.cpp` / `* copy.cpp` files.
 - **Boot loop / PSRAM errors** → confirm **PSRAM = OPI** and **Flash Size = 8MB**.
-- **Notes sync but no AI summary** → check **AI titles + topic links** is ticked and your OpenAI key has billing/chat access.
+- **Notes sync but no AI summary** → check **AI titles + topic links** is ticked and your chosen enrichment provider key has access.
 - **Wi-Fi won't connect** → ESP32-S3 is **2.4 GHz only**.
 - **Transcription fails after upgrading from Forrest Note** → NVS namespace changed (`forrest` → `amar`); do a full flash-erase (`esptool.py erase_flash`) before flashing, then re-provision via the portal.
 - **Groq transcription fails** → confirm your Groq key is saved and **STT Provider** is set to **Groq** in the portal. Groq's free tier has per-minute rate limits; if you hit them, switch back to OpenAI.
+- **Groq enrichment fails or returns empty** → check your Groq key and selected model. The `llama-4-scout` model has a lower rate limit (15 RPM); switch to `llama-3.3-70b-versatile` or `llama-3.1-8b-instant` if you hit limits. Alternatively switch enrichment provider to OpenAI.
 - **Note timestamps show wrong timezone** → edit `DEVICE_TZ_POSIX` in `config.h` and reflash. Common zone strings are listed there.
 
 ---
@@ -238,7 +264,7 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 
 - No secrets in this repo. Keys stored in on-device NVS.
 - Notes go only to your chosen STT provider (OpenAI or Groq) and your own GitHub repo.
-- AI enrichment uses OpenAI `gpt-4o-mini` only — this is not routed through Groq.
+- AI enrichment uses your chosen provider — either **OpenAI `gpt-4o-mini`** or a **Groq Llama model**. Audio never leaves the device; only the text transcript is sent to the enrichment provider.
 
 ---
 
