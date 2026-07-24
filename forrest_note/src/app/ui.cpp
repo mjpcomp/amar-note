@@ -579,7 +579,7 @@ void showTransferMode(const char* ip) {
   drawStrInBox(26, 74, 148, 24, "active", 1, WHITE);
   drawStrC(100, 124, "open browser", 1, BLACK);
   drawStrC(100, 146, ip, 1, BLACK);
-  drawStrC(100, 169, "double rec to exit", 1, BLACK);
+  drawStrC(100, 169, "hold rec to exit", 1, BLACK);
   refresh();
 }
 
