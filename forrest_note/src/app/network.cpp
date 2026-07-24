@@ -201,7 +201,7 @@ void handlePortalRoot() {
                 "<title>Amar Note Portal</title>" + portalCss() + "</head><body><div class='wrap'>";
 
   html += "<div class='top'><div><h1>amar note<br>portal</h1>"
-          "<div class='sub'>local note transfer · <a href=\"/tags\" style=\"color:inherit\">tags</a> · <a href=\"/provision\" style=\"color:inherit\">setup</a> · <a href=\"/ota\" style=\"color:inherit\">update</a></div></div>"
+          "<div class='sub'>local note transfer &middot; <a href=\"/tags\" style=\"color:inherit\">tags</a> &middot; <a href=\"/provision\" style=\"color:inherit\">setup</a> &middot; <a href=\"/ota\" style=\"color:inherit\">update</a></div></div>"
           "<div class='pill'>" + String((int)noteIndex.size()) + " notes</div></div>";
 
   html += "<div class='actions' style='margin-bottom:18px'>";
@@ -454,20 +454,51 @@ void handleProvisionPage() {
   html += "<div class='top'><div><h1>amar note<br>setup</h1>"
           "<div class='sub'>device provisioning</div></div></div>";
   html += "<div class='card'>";
+
+  // ── Status summary ──────────────────────────────────────────────────────────
   html += "<p class='hint'>Wi-Fi: " + String(cfg::hasWifi() ? "configured" : "not set") +
-          " &middot; OpenAI key: " + String(cfg::hasOpenAiKey() ? "configured" : "not set") +
+          " &middot; Groq: " + String(cfg::hasGroqKey() ? "configured" : "not set") +
+          " &middot; OpenAI: " + String(cfg::hasOpenAiKey() ? "configured" : "not set") +
           " &middot; GitHub: " + String(cfg::hasGithub() ? "on" : (cfg::githubRepo().length() ? "set, off" : "not set")) + "</p>";
+
   html += "<form action='/provision/save' method='post'>";
+
+  // ── Wi-Fi ───────────────────────────────────────────────────────────────────
+  html += "<hr><p class='hint'><b>Wi-Fi</b></p>";
   html += "<p><input name='ssid' placeholder='Wi-Fi network (SSID)'></p>";
   html += "<p><input name='pass' type='password' placeholder='Wi-Fi password'></p>";
+
+  // ── Transcription / AI keys ─────────────────────────────────────────────────
+  html += "<hr><p class='hint'><b>Transcription &amp; AI</b> &mdash; "
+          "Amar Note uses <b>Groq Whisper</b> (fast, free tier) for transcription and "
+          "<b>OpenAI GPT</b> for optional title &amp; topic enrichment. "
+          "You need at least one key to transcribe notes after syncing.</p>";
+
+  html += "<p class='hint'>&#x1F7E2; <b>Groq</b> (recommended for transcription) &mdash; "
+          "free API key at "
+          "<a href='https://console.groq.com/keys' target='_blank' style='color:#111'>console.groq.com/keys</a>. "
+          "Uses the <code>whisper-large-v3-turbo</code> model.</p>";
+  html += "<p><input name='groq' type='password' placeholder='Groq API key (gsk_...)'></p>";
+
+  html += "<p class='hint'>&#x1F7E1; <b>OpenAI</b> (optional, for AI titles &amp; topic links) &mdash; "
+          "key at "
+          "<a href='https://platform.openai.com/api-keys' target='_blank' style='color:#111'>platform.openai.com/api-keys</a>. "
+          "Used for GPT enrichment only; transcription uses Groq when available.</p>";
   html += "<p><input name='openai' type='password' placeholder='OpenAI API key (sk-...)'></p>";
-  html += "<hr><p class='hint'><b>Obsidian / GitHub vault</b></p>";
+
+  // ── GitHub / Obsidian vault ─────────────────────────────────────────────────
+  html += "<hr><p class='hint'><b>Obsidian / GitHub vault</b> &mdash; "
+          "Push transcribed notes as Markdown files to a GitHub repo. "
+          "Point Obsidian at the same repo to see notes appear automatically.</p>";
   html += "<p><input name='gh_repo' placeholder='GitHub repo (owner/name)' value='" + htmlEscape(cfg::githubRepo()) + "'></p>";
   html += "<p><input name='gh_branch' placeholder='Branch (default main)' value='" + htmlEscape(cfg::githubBranch()) + "'></p>";
   html += "<p><input name='gh_dir' placeholder='Vault folder (default VoiceNotes)' value='" + htmlEscape(cfg::githubDir()) + "'></p>";
+  html += "<p class='hint'>Create a fine-grained personal access token with <b>Contents: Read &amp; Write</b> "
+          "at <a href='https://github.com/settings/tokens' target='_blank' style='color:#111'>github.com/settings/tokens</a>.</p>";
   html += "<p><input name='gh_token' type='password' placeholder='GitHub token (github_pat_...)'></p>";
   html += "<p><label><input type='checkbox' name='gh_on' value='1'" + String(cfg::githubEnabled() ? " checked" : "") + "> Enable GitHub sync</label></p>";
-  html += "<p><label><input type='checkbox' name='gh_ai' value='1'" + String(cfg::githubAiEnrich() ? " checked" : "") + "> AI titles + topic links</label></p>";
+  html += "<p><label><input type='checkbox' name='gh_ai' value='1'" + String(cfg::githubAiEnrich() ? " checked" : "") + "> AI titles + topic links (requires OpenAI key)</label></p>";
+
   html += "<p class='hint'>Leave a text field blank to keep its current value.</p>";
   html += "<button type='submit'>Save</button></form></div>";
   html += "<a class='btn' href='/'>Back to notes</a>";
@@ -476,13 +507,15 @@ void handleProvisionPage() {
 }
 
 void handleProvisionSave() {
-  String ssid = transferServer.hasArg("ssid")   ? transferServer.arg("ssid")   : "";
-  String pass = transferServer.hasArg("pass")   ? transferServer.arg("pass")   : "";
-  String key  = transferServer.hasArg("openai") ? transferServer.arg("openai") : "";
-  ssid.trim(); key.trim();
+  String ssid    = transferServer.hasArg("ssid")   ? transferServer.arg("ssid")   : "";
+  String pass    = transferServer.hasArg("pass")   ? transferServer.arg("pass")   : "";
+  String groqKey = transferServer.hasArg("groq")   ? transferServer.arg("groq")   : "";
+  String key     = transferServer.hasArg("openai") ? transferServer.arg("openai") : "";
+  ssid.trim(); groqKey.trim(); key.trim();
   bool changed = false;
-  if (ssid.length() > 0) { cfg::setWifi(ssid, pass); changed = true; }
-  if (key.length()  > 0) { cfg::setOpenAiKey(key);   changed = true; }
+  if (ssid.length()    > 0) { cfg::setWifi(ssid, pass);      changed = true; }
+  if (groqKey.length() > 0) { cfg::setGroqKey(groqKey);      changed = true; }
+  if (key.length()     > 0) { cfg::setOpenAiKey(key);        changed = true; }
 
   if (transferServer.hasArg("gh_repo")) {
     String r = transferServer.arg("gh_repo"); r.trim();
