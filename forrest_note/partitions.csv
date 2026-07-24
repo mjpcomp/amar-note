@@ -1,6 +1,6 @@
 # Amar Note — 8 MB flash, dual-OTA layout.
 # Two 3 MB app slots (ota_0 / ota_1) give firmware ~3 MB each with room to grow.
-Name,   Type, SubType, Offset,    Size,     Flags
+# Name,   Type, SubType, Offset,    Size,     Flags
 nvs,    data, nvs,     0x9000,    0x5000,
 otadata,data, ota,     0xe000,    0x2000,
 app0,   app,  ota_0,   0x10000,   0x300000,
