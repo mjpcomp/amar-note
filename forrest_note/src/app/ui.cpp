@@ -572,7 +572,7 @@ void showSettings(int cursor) {
     uint8_t col = active ? WHITE : BLACK;
     if (row == 0) {
       drawStr(28, y + 8, "sounds", 1, col);
-      drawStr(W - 70, y + 8, palaSoundIsEnabled() ? "on" : "off", 1, col);
+      drawStr(W - 70, y + 8, amarSoundIsEnabled() ? "on" : "off", 1, col);
     } else if (row == 1) {
       drawStr(28, y + 8, "transfer", 1, col);
     } else if (row == 2) {
@@ -596,7 +596,7 @@ void showDeviceInfo() {
   drawStrFit(18, 112, 160, "ESP32-S3 ePaper 1.54", 1, BLACK);
   char b[24]; snprintf(b, sizeof(b), "%d notes", (int)noteIndex.size());
   drawStr(18, 138, b, 1, BLACK);
-  drawStr(18, 160, palaSoundIsEnabled() ? "sounds on" : "sounds off", 1, BLACK);
+  drawStr(18, 160, amarSoundIsEnabled() ? "sounds on" : "sounds off", 1, BLACK);
   drawStr(18, 178, rtcUtcIso().length() ? "rtc set" : "rtc not set", 1, BLACK);
   refresh();
 }

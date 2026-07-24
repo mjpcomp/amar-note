@@ -367,10 +367,13 @@ String utcToLocalDeviceLabel(const String& utcIso) {
   utc.tm_hour = utcIso.substring(11, 13).toInt();
   utc.tm_min  = utcIso.substring(14, 16).toInt();
   utc.tm_sec  = 0;
+  // Convert UTC broken-down time to epoch, then apply POSIX TZ to get local time.
+  // timegm() treats the struct as UTC regardless of the system TZ setting.
   time_t epoch = utcTmToEpoch(utc);
-  epoch += (LOCAL_TIME_OFFSET_MIN * 60);
+  setenv("TZ", DEVICE_TZ_POSIX, 1);
+  tzset();
   struct tm localTm;
-  gmtime_r(&epoch, &localTm);
+  localtime_r(&epoch, &localTm);
   char buf[22];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &localTm);
   return String(buf);

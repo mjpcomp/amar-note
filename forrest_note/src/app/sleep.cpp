@@ -26,7 +26,7 @@ void enterUltraSleep() {
   WiFi.mode(WIFI_OFF);
 
   audio_playback_set_vol(0);
-  palaSoundSetEnabled(false);
+  amarSoundSetEnabled(false);
 
   // Deep-sleep the panel controller (image is retained on e-paper), then cut the
   // display and audio power rails so they draw nothing during MCU deep sleep.
