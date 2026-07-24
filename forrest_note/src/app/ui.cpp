@@ -255,6 +255,22 @@ static void drawBolt(int x, int y) {
   fillTriangle(x+5, y+8,  x+10, y+8, x+3, y+18, BLACK);
 }
 
+// Small inline battery icon: body (bw x bh) + terminal nub on right.
+// x, y = top-left of the body rectangle. Total width = bw + 2.
+static void drawBatteryIcon(int x, int y, int bw, int bh, int pct, uint8_t color) {
+  // Outer body
+  strokeRect(x, y, bw, bh, 1, color);
+  // Terminal nub (2px wide, centred vertically on right edge)
+  int nubH = max(2, bh / 3);
+  int nubY = y + (bh - nubH) / 2;
+  fillRect(x + bw, nubY, 2, nubH, color);
+  // Fill bar proportional to charge level
+  if (pct > 0) {
+    int fillW = ((bw - 4) * constrain(pct, 0, 100)) / 100;
+    if (fillW > 0) fillRect(x + 2, y + 2, fillW, bh - 4, color);
+  }
+}
+
 void showIdle() {
   clearWhite();
   int  batt     = readBatteryPercent();
@@ -265,11 +281,24 @@ void showIdle() {
   char b[8];
   if (batt < 0) snprintf(b, sizeof(b), "--");
   else          snprintf(b, sizeof(b), "%d%%", batt);
-  int tw    = textW(b, 1);
-  int boltW = charging ? 14 : 0;
-  int x     = 100 - (tw + boltW) / 2;
-  if (charging) { drawBolt(x, 132); x += boltW; }
-  drawStr(x, 144, b, 1, BLACK);
+
+  // Layout: [bolt?] [battery icon] [% text], all centred together
+  const int iconW = 18;  // body width
+  const int iconH = 10;  // body height
+  const int iconTotalW = iconW + 2;  // body + nub
+  const int gap   = 4;   // gap between icon and text
+  int tw      = textW(b, 1);
+  int boltW   = charging ? 14 : 0;
+  int totalW  = boltW + iconTotalW + gap + tw;
+  int startX  = 100 - totalW / 2;
+
+  int cx = startX;
+  if (charging) { drawBolt(cx, 131); cx += boltW; }
+  // Icon baseline aligns with text baseline (text drawn at y=144, scale-1 font ~10px tall)
+  drawBatteryIcon(cx, 135, iconW, iconH, batt, BLACK);
+  cx += iconTotalW + gap;
+  drawStr(cx, 144, b, 1, BLACK);
+
   refresh();
 }
 
