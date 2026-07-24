@@ -76,6 +76,14 @@ bool record() {
   uint32_t totalMono = 0, t0 = millis();
   int      recPeak = 0;   // peak |sample| since the last UI update
 
+  // Minimum recording time (ms) before a button press can stop recording.
+  // Prevents the same tap that started recording from immediately stopping it.
+  const uint32_t MIN_REC_MS = 1000;
+
+  // Button debounce state for in-loop polling.
+  bool     btnWasDown  = false;
+  uint32_t btnDownAt   = 0;
+
   auto drain = [&](TickType_t wait) -> bool {
     size_t got = 0;
     void* item = xRingbufferReceive(ctx.ring, &got, wait);
@@ -89,13 +97,26 @@ bool record() {
     return true;
   };
 
-  // Record until tap-to-stop (g_stopRecording set by STATE_RECORDING EV_SINGLE)
-  // or the hard MAX_REC_MS cap is hit.  1-second minimum enforced so accidental
-  // double-taps do not produce empty files.
   uint32_t lastUi = 0;
   while (!g_stopRecording && (millis() - t0 < MAX_REC_MS)) {
     drain(pdMS_TO_TICKS(40));
+
+    // Poll BTN_REC directly — the main loop() is blocked here so readButtonEvent()
+    // is never called.  A clean tap (press + release) after MIN_REC_MS stops recording.
     uint32_t now = millis();
+    bool btnDown = (digitalRead(BTN_REC) == LOW);
+    if (btnDown && !btnWasDown) {
+      btnDownAt  = now;
+      btnWasDown = true;
+    } else if (!btnDown && btnWasDown) {
+      // Released — treat as a tap if held < long threshold and past the min-rec window.
+      uint32_t held = now - btnDownAt;
+      if (held < BTN_LONG_MS && (now - t0) >= MIN_REC_MS) {
+        g_stopRecording = true;
+      }
+      btnWasDown = false;
+    }
+
     if (now - lastUi >= 100) {
       lastUi = now;
       int lvl = (int)((long)recPeak * 152L * 3L / 32767L);
