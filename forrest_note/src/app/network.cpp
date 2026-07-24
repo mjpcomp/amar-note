@@ -6,6 +6,7 @@
 #include "notes.h"
 #include "rtc.h"
 #include "ui.h"
+#include "battery.h"
 #include "config_store.h"
 #include "WiFi.h"
 #include "WiFiClientSecure.h"
@@ -16,11 +17,10 @@
 #include "esp_heap_caps.h"
 #include "../../secrets.h"
 
-// IDF built-in Mozilla CA root bundle (libmbedtls.a). Auto-maintained with the
-// esp32 core, so server certs validate without shipping/rotating a pinned PEM.
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
+// ─── Transcription ────────────────────────────────────────────────────────────
 static bool transcribeOnce(const String& wavPath, int noteNum) {
   String oaiKey = cfg::openaiKey();
   if (oaiKey.length() == 0) { Serial.println("[Whisper] no API key set"); return false; }
@@ -125,7 +125,7 @@ void transcribeAll() {
   Serial.printf("[Whisper] synced %d/%d pending\n", done, pending);
 }
 
-// ─── Portal helpers ────────────────────────────────────────────────────────────────────────────
+// ─── Portal helpers ──────────���────────────────────────────────────────────────
 String htmlEscape(const String& s) {
   String out = s;
   out.replace("&", "&amp;"); out.replace("<", "&lt;");
@@ -157,38 +157,179 @@ String urlDecodeSimple(String s) {
   return out;
 }
 
+// ─── Shared CSS ───────────────────────────────────────────────────────────────
 String portalCss() {
   return String(
     "<style>"
-    ":root{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;color:#111;background:#f3f0e9;}"
-    "body{margin:0;padding:24px;background:#f3f0e9;}"
-    ".wrap{max-width:780px;margin:0 auto;}"
-    ".top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;}"
-    "h1{font-size:44px;letter-spacing:-.06em;line-height:.9;margin:0;font-weight:800;}"
-    ".sub{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:#6a665f;margin-top:10px;}"
-    ".pill{display:inline-flex;border:1px solid #111;border-radius:999px;padding:8px 12px;font-size:13px;background:#fffaf1;}"
-    ".grid{display:grid;grid-template-columns:1fr;gap:14px;}"
-    ".card{background:#fffaf1;border:1.5px solid #111;border-radius:24px;padding:18px;box-shadow:4px 4px 0 #111;}"
-    ".row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;}"
-    ".num{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#6a665f;margin-bottom:8px;}"
-    ".date{font-size:13px;color:#6a665f;margin:-4px 0 12px;}"
-    ".title{font-size:24px;line-height:1.05;letter-spacing:-.04em;font-weight:750;margin:0 0 12px;}"
-    ".tag{border:1px solid #111;border-radius:999px;padding:5px 9px;font-size:12px;white-space:nowrap;background:#111;color:#fff;}"
-    ".text{font-size:15px;line-height:1.45;color:#222;margin:0 0 14px;white-space:pre-wrap;}"
-    ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}"
-    "a.btn{color:#111;text-decoration:none;border:1px solid #111;border-radius:999px;padding:8px 12px;background:#f3f0e9;font-size:13px;}"
-    "a.btn.primary{background:#111;color:#fff;}"
-    ".empty{border:1.5px dashed #111;border-radius:24px;padding:34px;text-align:center;color:#6a665f;}"
-    "audio{width:100%;margin-top:8px;}"
-    "@media(max-width:520px){body{padding:16px}h1{font-size:36px}.card{border-radius:20px}.title{font-size:21px}}"
+    // ── Reset & base
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    ":root{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111;background:#f3f0e9}"
+    "body{background:#f3f0e9;padding:0 0 40px}"
+    "a{color:inherit}"
+
+    // ── Top header bar
+    ".header{background:#111;color:#f3f0e9;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px}"
+    ".header-brand{font-size:18px;font-weight:800;letter-spacing:-.04em;text-decoration:none;color:#f3f0e9}"
+    ".header-status{display:flex;align-items:center;gap:12px;font-size:12px;color:#aaa8a3}"
+    ".batt-wrap{display:flex;align-items:center;gap:5px}"
+    ".batt-bar{width:28px;height:13px;border:1.5px solid #aaa8a3;border-radius:3px;position:relative;display:inline-block}"
+    ".batt-bar::after{content:'';position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:3px;height:6px;background:#aaa8a3;border-radius:0 2px 2px 0}"
+    ".batt-fill{position:absolute;left:1px;top:1px;bottom:1px;border-radius:1px;background:#6db56d;transition:width .3s}"
+    ".batt-fill.low{background:#c0392b}"
+    ".batt-fill.charging{background:#f0b429}"
+    ".header-time{white-space:nowrap}"
+
+    // ── Breadcrumb nav
+    ".breadcrumb{font-size:12px;color:#6a665f;padding:10px 20px 0;letter-spacing:.02em}"
+    ".breadcrumb a{color:#6a665f;text-decoration:none;border-bottom:1px solid #ccc9c2}"
+    ".breadcrumb a:hover{color:#111}"
+    ".breadcrumb span{margin:0 5px;color:#bbb}"
+
+    // ── Page wrap
+    ".wrap{max-width:800px;margin:0 auto;padding:0 20px}"
+
+    // ── Page title
+    ".page-title{font-size:40px;font-weight:800;letter-spacing:-.06em;line-height:.9;margin:24px 0 6px}"
+    ".page-sub{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#6a665f;margin-bottom:22px}"
+
+    // ── Cards
+    ".card{background:#fffaf1;border:1.5px solid #111;border-radius:20px;padding:18px 20px;box-shadow:4px 4px 0 #111;margin-bottom:16px}"
+    ".card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#6a665f;margin-bottom:14px;display:flex;align-items:center;gap:8px}"
+    ".badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;letter-spacing:.06em}"
+    ".badge-ok{background:#d4edda;color:#1a6630}"
+    ".badge-warn{background:#fff3cd;color:#856404}"
+    ".badge-off{background:#e9ecef;color:#6c757d}"
+
+    // ── Rows inside cards
+    ".row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}"
+    ".note-num{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6a665f;margin-bottom:6px}"
+    ".note-date{font-size:12px;color:#6a665f;margin:-2px 0 10px}"
+    ".note-title{font-size:22px;line-height:1.05;letter-spacing:-.04em;font-weight:750;margin:0 0 10px}"
+    ".tag-chip{border:1px solid #111;border-radius:999px;padding:4px 9px;font-size:12px;white-space:nowrap;background:#111;color:#fff}"
+    ".note-text{font-size:14px;line-height:1.5;color:#333;white-space:pre-wrap;margin:0 0 12px}"
+    "audio{width:100%;margin-top:6px;border-radius:8px}"
+
+    // ── Empty state
+    ".empty{border:1.5px dashed #bbb;border-radius:20px;padding:34px;text-align:center;color:#6a665f;font-size:14px}"
+
+    // ── Action rows
+    ".actions{display:flex;flex-wrap:wrap;gap:8px}"
+    ".actions.top{margin-bottom:20px}"
+
+    // ── Buttons
+    "a.btn,button.btn,button[type=submit]{display:inline-flex;align-items:center;font:inherit;font-size:13px;font-weight:600;"
+    "color:#111;text-decoration:none;border:1.5px solid #111;border-radius:999px;padding:8px 14px;"
+    "background:#f3f0e9;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}"
+    "a.btn:hover,button.btn:hover,button[type=submit]:hover{background:#111;color:#f3f0e9}"
+    "a.btn.primary,button.btn.primary,button[type=submit]{background:#111;color:#f3f0e9}"
+    "a.btn.primary:hover,button.btn.primary:hover,button[type=submit]:hover{background:#333}"
+    "a.btn.danger{border-color:#c0392b;color:#c0392b;background:#fffaf1}"
+    "a.btn.danger:hover{background:#c0392b;color:#fff}"
+
+    // ── Forms
+    ".form-section{margin-bottom:18px}"
+    ".form-label{font-size:12px;font-weight:600;letter-spacing:.04em;color:#555;display:block;margin-bottom:5px}"
+    "input[type=text],input[type=password],input[type=url],select{"
+    "font:inherit;font-size:14px;padding:10px 14px;border:1.5px solid #ccc9c2;"
+    "border-radius:999px;background:#fff;width:100%;outline:none;"
+    "transition:border-color .15s}"
+    "input[type=text]:focus,input[type=password]:focus,input[type=url]:focus,select:focus{border-color:#111}"
+    "select{border-radius:10px;padding-right:32px;appearance:none;"
+    "background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\");"
+    "background-repeat:no-repeat;background-position:right 12px center}"
+    ".radio-group{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}"
+    ".radio-group label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"
+    "border:1.5px solid #ccc9c2;border-radius:999px;padding:7px 13px;background:#fff;"
+    "transition:border-color .15s,background .15s}"
+    ".radio-group label:has(input:checked){border-color:#111;background:#111;color:#f3f0e9}"
+    ".radio-group input[type=radio]{display:none}"
+    ".hint{font-size:12px;color:#6a665f;line-height:1.5;margin-top:4px}"
+    "hr.divider{border:none;border-top:1px solid #e6e3dc;margin:18px 0}"
+
+    // ── Tags page
+    ".tag-row{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #e6e3dc;padding:12px 0}"
+    ".tag-row:first-child{border-top:none;padding-top:0}"
+    ".tag-name{font-size:18px;font-weight:700}"
+    ".tag-meta{font-size:12px;color:#6a665f;margin-top:3px}"
+    ".msg{border:1.5px solid #111;border-radius:14px;padding:10px 14px;background:#fff;font-size:13px;margin-bottom:12px}"
+
+    // ── Note count pill
+    ".count-pill{display:inline-flex;align-items:center;border:1.5px solid #111;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;background:#fffaf1}"
+
+    // ── Responsive
+    "@media(max-width:520px){"
+    "body{padding:0 0 32px}"
+    ".page-title{font-size:32px}"
+    ".card{border-radius:16px;padding:14px 16px}"
+    ".note-title{font-size:19px}"
+    ".header{padding:11px 16px}"
+    "}"
     "</style>"
   );
 }
 
-// ─── Portal handlers ───────────────────────────────────────────────────────────────────────────
+// ─── Shared header HTML (injected at top of every page) ──────────────────────
+// Battery and time values are populated client-side via /api/status fetch.
+String portalHeader(const char* pageTitle, const char* breadcrumb) {
+  String h = "";
+  // Top bar
+  h += "<div class='header'>";
+  h += "<a class='header-brand' href='/'>amar note</a>";
+  h += "<div class='header-status'>";
+  h += "<div class='batt-wrap' id='batt-wrap' style='display:none'>";
+  h += "<div class='batt-bar'><div class='batt-fill' id='batt-fill' style='width:0%'></div></div>";
+  h += "<span id='batt-pct'></span>";
+  h += "</div>";
+  h += "<span class='header-time' id='hdr-time'></span>";
+  h += "</div></div>";
+  // Breadcrumb
+  if (breadcrumb && strlen(breadcrumb) > 0) {
+    h += "<div class='breadcrumb'><a href='/'>portal</a><span>&#8250;</span>";
+    h += String(breadcrumb);
+    h += "</div>";
+  }
+  // JS: fetch /api/status once and populate header
+  h += "<script>";
+  h += "(function(){";
+  h += "fetch('/api/status').then(function(r){return r.json();}).then(function(d){";
+  // Time
+  h += "if(d.time){var t=new Date(d.time);if(!isNaN(t)){document.getElementById('hdr-time').textContent=t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+' \u00b7 '+t.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});}}";
+  // Battery
+  h += "if(typeof d.batt==='number'){";
+  h += "var w=document.getElementById('batt-wrap');var f=document.getElementById('batt-fill');var p=document.getElementById('batt-pct');";
+  h += "w.style.display='flex';";
+  h += "var pct=Math.max(0,Math.min(100,d.batt));";
+  h += "f.style.width=pct+'%';";
+  h += "f.className='batt-fill'+(pct<=20?' low':d.charging?' charging':'');";
+  h += "p.textContent=pct+'%'+(d.charging?' \u26A1':'');";
+  h += "}";
+  h += "}).catch(function(){});";
+  h += "})();";
+  h += "</script>";
+  return h;
+}
+
+// ─── /api/status ─────────────────────────────────────────────────────────────
+void handleApiStatus() {
+  int   batt     = readBatteryPercent();
+  bool  charging = isBatteryCharging();
+  String timeStr = rtcUtcIso();
+  int   noteCount = (int)noteIndex.size();
+
+  String json = "{";
+  json += "\"batt\":" + String(batt) + ",";
+  json += "\"charging\":" + String(charging ? "true" : "false") + ",";
+  json += "\"notes\":" + String(noteCount);
+  if (timeStr.length() > 0) json += ",\"time\":\"" + timeStr + "\"";
+  json += "}";
+
+  transferServer.sendHeader("Cache-Control", "no-cache");
+  transferServer.send(200, "application/json", json);
+}
+
+// ─── Portal root (/) ──────────────────────────────────────────────────────────
 void handlePortalRoot() {
   loadIndex();
-
   Serial.println("[HTTP] GET /");
   String filter = "All";
   if (transferServer.hasArg("tag")) filter = transferServer.arg("tag");
@@ -198,34 +339,43 @@ void handlePortalRoot() {
 
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>Amar Note Portal</title>" + portalCss() + "</head><body><div class='wrap'>";
+                "<title>Amar Note Portal</title>" + portalCss() + "</head><body>";
+  html += portalHeader("Portal", "");
+  html += "<div class='wrap'>";
+  html += "<div class='page-title'>notes</div>";
+  html += "<div class='page-sub'>"
+          "<a href='/tags'>tags</a> &middot; "
+          "<a href='/provision'>setup</a> &middot; "
+          "<a href='/ota'>update</a>"
+          "</div>";
 
-  html += "<div class='top'><div><h1>amar note<br>portal</h1>"
-          "<div class='sub'>local note transfer &middot; <a href=\"/tags\" style=\"color:inherit\">tags</a> &middot; <a href=\"/provision\" style=\"color:inherit\">setup</a> &middot; <a href=\"/ota\" style=\"color:inherit\">update</a></div></div>"
-          "<div class='pill'>" + String((int)noteIndex.size()) + " notes</div></div>";
-
-  html += "<div class='actions' style='margin-bottom:18px'>";
+  // Tag filter + count row
+  html += "<div class='actions top'>";
   html += "<a class='btn " + String(filter == "All" ? "primary" : "") + "' href='/'>All</a>";
   for (int t = 0; t < tagCount; t++) {
     String tag = String(tags[t]);
-    html += "<a class='btn " + String(filter == tag ? "primary" : "") + "' href='/?tag=" + tag + "'>" + htmlEscape(tag) + "</a>";
+    html += "<a class='btn " + String(filter == tag ? "primary" : "") + "' href='/?tag=" + htmlEscape(tag) + "'>" + htmlEscape(tag) + "</a>";
   }
+  html += "<span style='margin-left:auto'><span class='count-pill'>" + String((int)noteIndex.size()) + " notes</span></span>";
   html += "</div>";
 
-  html += "<div class='actions' style='margin-bottom:24px'>";
-  html += "<a class='btn primary' href='/export.txt'>Download all TXT</a>";
+  // Export
+  html += "<div class='actions' style='margin-bottom:22px'>";
+  html += "<a class='btn primary' href='/export.txt'>&#8681; Export all TXT</a>";
   if (filter != "All")
-    html += "<a class='btn' href='/export.txt?tag=" + filter + "'>Download " + htmlEscape(filter) + " TXT</a>";
+    html += "<a class='btn' href='/export.txt?tag=" + htmlEscape(filter) + "'>&#8681; Export " + htmlEscape(filter) + "</a>";
   html += "</div>";
 
+  transferServer.sendContent(html); html = "";
+
+  // Notes
   int visibleCount = 0;
   for (int i = 0; i < (int)noteIndex.size(); i++)
     if (filter == "All" || filter == String(noteIndex[i].tag)) visibleCount++;
 
   if (visibleCount <= 0) {
-    html += "<div class='empty'>No notes for this filter.</div>";
+    html += "<div class='empty'>No notes" + String(filter != "All" ? " for this tag." : " yet.") + "</div>";
   } else {
-    html += "<div class='grid'>";
     for (int v = 0; v < (int)noteIndex.size(); v++) {
       int i = (int)noteIndex.size() - 1 - v;
       if (!(filter == "All" || filter == String(noteIndex[i].tag))) continue;
@@ -240,47 +390,47 @@ void handlePortalRoot() {
         transcript = noteIndex[i].hasText ? "(empty transcript)" : "Not transcribed yet.";
 
       String title = transcript; title.replace("\n", " "); title.trim();
-      if (title.length() > 58) title = title.substring(0, 58) + "...";
-      if (title.length() == 0 || title == "Not transcribed yet.")
-        title = String("Voice note ") + String(num);
+      if (title.length() > 58) title = title.substring(0, 58) + "\u2026";
+      if (title.length() == 0 || title == "Not transcribed yet.") title = String("Voice note ") + String(num);
 
       html += "<div class='card'>";
-      html += "<div class='row'><div><div class='num'>#" + String(num) + "</div>";
-      html += "<h2 class='title'>" + htmlEscape(title) + "</h2>";
+      html += "<div class='row'><div style='flex:1;min-width:0'>";
+      html += "<div class='note-num'>#" + String(num) + "</div>";
+      html += "<h2 class='note-title'>" + htmlEscape(title) + "</h2>";
       String createdUtc = noteCreatedUtc(num);
       if (createdUtc.length() > 0)
-        html += "<div class='date' data-utc='" + createdUtc + "'>" + createdUtc + "</div>";
+        html += "<div class='note-date' data-utc='" + createdUtc + "'>" + createdUtc + "</div>";
       else
-        html += "<div class='date'>time not set</div>";
+        html += "<div class='note-date'>time not set</div>";
       html += "</div>";
-      html += "<div class='tag'>" + htmlEscape(String(noteIndex[i].tag)) + "</div></div>";
-      html += "<p class='text'>" + htmlEscape(transcript) + "</p>";
+      html += "<div><span class='tag-chip'>" + htmlEscape(String(noteIndex[i].tag)) + "</span></div></div>";
+      html += "<p class='note-text'>" + htmlEscape(transcript) + "</p>";
       if (SD_MMC.exists(wavPath))
         html += "<audio controls src='/audio?num=" + String(num) + "'></audio>";
-      html += "<div class='actions'>";
-      html += "<a class='btn primary' href='/txt?num=" + String(num) + "'>Download TXT</a>";
+      html += "<div class='actions' style='margin-top:12px'>";
+      html += "<a class='btn primary' href='/txt?num=" + String(num) + "'>&#8681; TXT</a>";
       if (SD_MMC.exists(wavPath))
-        html += "<a class='btn' href='/wav?num=" + String(num) + "'>Download WAV</a>";
-      html += "<a class='btn' style='margin-left:auto;color:#c0392b;border-color:#c0392b' "
+        html += "<a class='btn' href='/wav?num=" + String(num) + "'>&#8681; WAV</a>";
+      html += "<a class='btn danger' style='margin-left:auto' "
               "href='/note/delete?num=" + String(num) + "' "
               "onclick=\"return confirm('Delete note #" + String(num) + "? This cannot be undone.')\">Delete</a>";
       html += "</div></div>";
+
       if (html.length() > 2048) { transferServer.sendContent(html); html = ""; }
     }
-    html += "</div>";
   }
 
-  html += "<script>"
-          "document.querySelectorAll('[data-utc]').forEach(function(el){"
+  // Date localisation
+  html += "<script>document.querySelectorAll('[data-utc]').forEach(function(el){"
           "var d=new Date(el.dataset.utc);"
-          "if(!isNaN(d)){el.textContent=d.toLocaleString([],{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});}"
-          "});"
-          "</script>";
+          "if(!isNaN(d))el.textContent=d.toLocaleString([],{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});"
+          "});</script>";
   html += "</div></body></html>";
   transferServer.sendContent(html);
   transferServer.sendContent("");
 }
 
+// ─── /api/notes JSON ─────────────────────────────────────────────────────────
 void handlePortalJson() {
   loadIndex();
   String json = "[";
@@ -297,6 +447,7 @@ void handlePortalJson() {
   transferServer.send(200, "application/json", json);
 }
 
+// ─── /export.txt ─────────────────────────────────────────────────────────────
 void handleExportTxt() {
   loadIndex();
   String filter = "All";
@@ -311,7 +462,6 @@ void handleExportTxt() {
   transferServer.send(200, "text/plain", "");
 
   String chunk = "Amar Note Export\nFilter: " + filter + "\n------------------------------\n\n";
-
   for (int v = 0; v < (int)noteIndex.size(); v++) {
     int i = (int)noteIndex.size() - 1 - v;
     if (!(filter == "All" || filter == String(noteIndex[i].tag))) continue;
@@ -329,11 +479,11 @@ void handleExportTxt() {
     chunk += "\n" + transcript + "\n\n------------------------------\n\n";
     if (chunk.length() > 2048) { transferServer.sendContent(chunk); chunk = ""; }
   }
-
   transferServer.sendContent(chunk);
   transferServer.sendContent("");
 }
 
+// ─── File download helpers ───────────────────────────────────────────────────
 void sendFileByNum(const char* ext, const char* mime, bool attachment) {
   if (!transferServer.hasArg("num")) { transferServer.send(400, "text/plain", "Missing num"); return; }
   int num = transferServer.arg("num").toInt();
@@ -349,10 +499,10 @@ void sendFileByNum(const char* ext, const char* mime, bool attachment) {
   f.close();
 }
 
+// ─── /tags ───────────────────────────────────────────────────────────────────
 void handleTagAdd() {
   if (!transferServer.hasArg("name")) {
-    transferServer.sendHeader("Location", "/tags?msg=missing");
-    transferServer.send(303); return;
+    transferServer.sendHeader("Location", "/tags?msg=missing"); transferServer.send(303); return;
   }
   String name = urlDecodeSimple(transferServer.arg("name"));
   bool ok = addCustomTag(name.c_str());
@@ -362,8 +512,7 @@ void handleTagAdd() {
 
 void handleTagDelete() {
   if (!transferServer.hasArg("name")) {
-    transferServer.sendHeader("Location", "/tags?msg=missing");
-    transferServer.send(303); return;
+    transferServer.sendHeader("Location", "/tags?msg=missing"); transferServer.send(303); return;
   }
   String name = urlDecodeSimple(transferServer.arg("name"));
   bool hadNotes = tagHasNotes(name.c_str());
@@ -380,63 +529,56 @@ void handleTagsPage() {
 
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>Amar Note Tags</title>"
-                "<style>"
-                "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px;background:#f3f0e9;color:#111}"
-                ".wrap{max-width:720px;margin:0 auto}"
-                "h1{font-size:42px;line-height:.9;letter-spacing:-.05em;margin:0 0 22px;font-weight:800}"
-                ".card{background:#fffaf1;border:1.5px solid #111;border-radius:24px;padding:18px;margin:14px 0;box-shadow:4px 4px 0 #111}"
-                ".row{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #ddd;padding:12px 0}"
-                ".row:first-child{border-top:0}"
-                ".tag{font-size:20px;font-weight:700}"
-                ".meta{font-size:13px;color:#666;margin-top:4px}"
-                "input{font:inherit;padding:12px;border:1.5px solid #111;border-radius:999px;background:#fff;width:100%;box-sizing:border-box}"
-                "button,.btn{font:inherit;border:1.5px solid #111;border-radius:999px;padding:10px 14px;background:#111;color:#fff;text-decoration:none;white-space:nowrap}"
-                ".danger{background:#fffaf1;color:#111}"
-                ".msg{border:1.5px solid #111;border-radius:18px;padding:12px 14px;background:#fff;margin:12px 0}"
-                ".hint{font-size:13px;color:#666;line-height:1.4}"
-                "form.add{display:flex;gap:10px}"
-                "</style></head><body><div class='wrap'>";
-
-  html += "<h1>amar note<br>tags</h1>";
-  html += "<a class='btn' href='/'>Back to notes</a>";
+                "<title>Amar Note \u00b7 Tags</title>" + portalCss() + "</head><body>";
+  html += portalHeader("Tags", "tags");
+  html += "<div class='wrap'>";
+  html += "<div class='page-title'>tags</div>";
+  html += "<div class='page-sub'>manage note categories</div>";
 
   if (transferServer.hasArg("msg")) {
     String msg = transferServer.arg("msg");
-    html += "<div class='msg'>";
-    if (msg == "added") html += "Tag added.";
-    else if (msg == "exists")    html += "Tag already exists or cannot be added.";
-    else if (msg == "deleted")   html += "Tag deleted.";
-    else if (msg == "moved")     html += "Tag deleted. Existing notes were moved to Untagged.";
-    else if (msg == "protected") html += "This tag cannot be deleted.";
-    else html += "Please enter a tag name.";
-    html += "</div>";
+    const char* text = "Unknown message.";
+    if      (msg == "added")     text = "\u2713 Tag added.";
+    else if (msg == "exists")    text = "Tag already exists or is invalid.";
+    else if (msg == "deleted")   text = "\u2713 Tag deleted.";
+    else if (msg == "moved")     text = "\u2713 Tag deleted. Existing notes moved to Untagged.";
+    else if (msg == "protected") text = "This tag cannot be deleted.";
+    else if (msg == "missing")   text = "Please enter a tag name.";
+    html += "<div class='msg'>" + String(text) + "</div>";
   }
 
-  html += "<div class='card'><form class='add' action='/tag/add' method='get'>"
-          "<input name='name' maxlength='31' placeholder='New tag name'>"
-          "<button type='submit'>Add</button></form>"
-          "<p class='hint'>Tags appear on the device after recording. Keep them short for the e-paper UI.</p></div>";
-
+  // Add tag form
   html += "<div class='card'>";
+  html += "<div class='card-title'>Add tag</div>";
+  html += "<form class='actions' action='/tag/add' method='get' style='gap:10px'>";
+  html += "<input type='text' name='name' maxlength='31' placeholder='New tag name' style='max-width:280px'>";
+  html += "<button type='submit' class='btn primary'>Add</button></form>";
+  html += "<p class='hint' style='margin-top:10px'>Keep tags short \u2014 they display on the e-paper screen on the device.</p>";
+  html += "</div>";
+
+  // Tag list
+  html += "<div class='card'>";
+  html += "<div class='card-title'>" + String(tagCount) + " tag" + String(tagCount == 1 ? "" : "s") + "</div>";
   for (int i = 0; i < tagCount; i++) {
     int cnt = 0;
     for (int n = 0; n < (int)noteIndex.size(); n++)
       if (strcmp(noteIndex[n].tag, tags[i]) == 0) cnt++;
-    html += "<div class='row'><div><div class='tag'>" + htmlEscape(String(tags[i])) + "</div>";
-    html += "<div class='meta'>" + String(cnt) + (cnt == 1 ? " note" : " notes");
-    if (cnt > 0) html += " \u00b7 deleting moves them to Untagged";
+    html += "<div class='tag-row'><div>";
+    html += "<div class='tag-name'>" + htmlEscape(String(tags[i])) + "</div>";
+    html += "<div class='tag-meta'>" + String(cnt) + (cnt == 1 ? " note" : " notes");
+    if (cnt > 0) html += " \u00b7 notes move to Untagged if deleted";
     html += "</div></div>";
-    if (strcasecmp(tags[i], "Untagged") != 0) {
+    if (strcasecmp(tags[i], "Untagged") != 0)
       html += "<a class='btn danger' href='/tag/delete?name=" + htmlEscape(String(tags[i])) + "' "
-              "onclick=\"return confirm('Delete this tag? Notes will not be deleted. Existing notes will move to Untagged.');\">Delete</a>";
-    }
+              "onclick=\"return confirm('Delete tag? Notes will move to Untagged.')\">Delete</a>";
     html += "</div>";
   }
-  html += "</div></div></body></html>";
+  html += "</div>";
+  html += "</div></body></html>";
   transferServer.send(200, "text/html", html);
 }
 
+// ─── /note/delete ────────────────────────────────────────────────────────────
 void handleNoteDelete() {
   if (!transferServer.hasArg("num")) { transferServer.send(400, "text/plain", "Missing num"); return; }
   int num = transferServer.arg("num").toInt();
@@ -446,77 +588,182 @@ void handleNoteDelete() {
   transferServer.send(303);
 }
 
+// ─── /provision (GET) ────────────────────────────────────────────────────────
 void handleProvisionPage() {
   Serial.println("[HTTP] GET /provision");
+
+  // Read current state for status badges and pre-fill
+  bool hasWifi   = cfg::hasWifi();
+  bool hasGroq   = cfg::hasGroqKey();
+  bool hasOai    = cfg::hasOpenAiKey();
+  bool hasGh     = cfg::hasGithub();
+  bool ghOn      = cfg::githubEnabled();
+  bool ghAi      = cfg::githubAiEnrich();
+  uint8_t sttProv     = cfg::sttProvider();    // 0=OpenAI, 1=Groq
+  uint8_t enrichProv  = cfg::enrichProvider(); // 0=OpenAI, 1=Groq
+  String enrichModel  = cfg::enrichModel();
+  String ghRepo   = cfg::githubRepo();
+  String ghBranch = cfg::githubBranch();
+  String ghDir    = cfg::githubDir();
+
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>Amar Note Setup</title>" + portalCss() + "</head><body><div class='wrap'>";
-  html += "<div class='top'><div><h1>amar note<br>setup</h1>"
-          "<div class='sub'>device provisioning</div></div></div>";
-  html += "<div class='card'>";
+                "<title>Amar Note \u00b7 Setup</title>" + portalCss() + "</head><body>";
+  html += portalHeader("Setup", "setup");
+  html += "<div class='wrap'>";
+  html += "<div class='page-title'>setup</div>";
+  html += "<div class='page-sub'>device provisioning</div>";
 
-  // ── Status summary ──────────────────────────────────────────────────────────
-  html += "<p class='hint'>Wi-Fi: " + String(cfg::hasWifi() ? "configured" : "not set") +
-          " &middot; Groq: " + String(cfg::hasGroqKey() ? "configured" : "not set") +
-          " &middot; OpenAI: " + String(cfg::hasOpenAiKey() ? "configured" : "not set") +
-          " &middot; GitHub: " + String(cfg::hasGithub() ? "on" : (cfg::githubRepo().length() ? "set, off" : "not set")) + "</p>";
+  // ── Status summary row
+  html += "<div class='card'>";
+  html += "<div class='card-title'>current status</div>";
+  html += "<div class='actions' style='gap:8px'>";
+  auto badge = [&](const char* label, bool ok, const char* offLabel = nullptr) -> String {
+    String cls = ok ? "badge-ok" : "badge-warn";
+    String lbl = ok ? String(label) + " \u2713" : String(offLabel ? offLabel : label) + " \u26A0";
+    return "<span class='badge " + cls + "'>" + lbl + "</span>";
+  };
+  html += badge("Wi-Fi", hasWifi);
+  html += badge("Groq", hasGroq);
+  html += badge("OpenAI", hasOai);
+  html += badge("GitHub", hasGh, ghOn ? "GitHub (key missing)" : "GitHub (off)");
+  html += "</div></div>";
 
   html += "<form action='/provision/save' method='post'>";
 
-  // ── Wi-Fi ───────────────────────────────────────────────────────────────────
-  html += "<hr><p class='hint'><b>Wi-Fi</b></p>";
-  html += "<p><input name='ssid' placeholder='Wi-Fi network (SSID)'></p>";
-  html += "<p><input name='pass' type='password' placeholder='Wi-Fi password'></p>";
+  // ── Wi-Fi card
+  html += "<div class='card'>";
+  html += "<div class='card-title'>Wi-Fi " + badge("connected", hasWifi, "not configured") + "</div>";
+  html += "<div class='form-section'><label class='form-label'>Network name (SSID)</label>"
+          "<input type='text' name='ssid' placeholder='Your Wi-Fi network name'></div>";
+  html += "<div class='form-section'><label class='form-label'>Password</label>"
+          "<input type='password' name='pass' placeholder='Wi-Fi password'></div>";
+  html += "<p class='hint'>Leave blank to keep the current network.</p>";
+  html += "</div>";
 
-  // ── Transcription / AI keys ─────────────────────────────────────────────────
-  html += "<hr><p class='hint'><b>Transcription &amp; AI</b> &mdash; "
-          "Amar Note uses <b>Groq Whisper</b> (fast, free tier) for transcription and "
-          "<b>OpenAI GPT</b> for optional title &amp; topic enrichment. "
-          "You need at least one key to transcribe notes after syncing.</p>";
+  // ── Transcription & AI card
+  html += "<div class='card'>";
+  html += "<div class='card-title'>Transcription &amp; AI</div>";
 
-  html += "<p class='hint'>&#x1F7E2; <b>Groq</b> (recommended for transcription) &mdash; "
-          "free API key at "
-          "<a href='https://console.groq.com/keys' target='_blank' style='color:#111'>console.groq.com/keys</a>. "
-          "Uses the <code>whisper-large-v3-turbo</code> model.</p>";
-  html += "<p><input name='groq' type='password' placeholder='Groq API key (gsk_...)'></p>";
+  // STT provider
+  html += "<div class='form-section'>";
+  html += "<label class='form-label'>Transcription engine</label>";
+  html += "<div class='radio-group'>";
+  html += "<label><input type='radio' name='stt_prov' value='1'" + String(sttProv == 1 ? " checked" : "") + ">";
+  html += "Groq Whisper <span style='font-size:11px;color:#6a665f'>(recommended \u00b7 free)</span></label>";
+  html += "<label><input type='radio' name='stt_prov' value='0'" + String(sttProv == 0 ? " checked" : "") + ">";
+  html += "OpenAI Whisper</label>";
+  html += "</div></div>";
 
-  html += "<p class='hint'>&#x1F7E1; <b>OpenAI</b> (optional, for AI titles &amp; topic links) &mdash; "
-          "key at "
-          "<a href='https://platform.openai.com/api-keys' target='_blank' style='color:#111'>platform.openai.com/api-keys</a>. "
-          "Used for GPT enrichment only; transcription uses Groq when available.</p>";
-  html += "<p><input name='openai' type='password' placeholder='OpenAI API key (sk-...)'></p>";
+  // Groq key
+  html += "<div class='form-section'>";
+  html += "<label class='form-label'>Groq API key " + badge("set", hasGroq, "not set") + "</label>";
+  html += "<input type='password' name='groq' placeholder='gsk_\u2026 \u2014 free key at console.groq.com/keys'>";
+  html += "</div>";
 
-  // ── GitHub / Obsidian vault ─────────────────────────────────────────────────
-  html += "<hr><p class='hint'><b>Obsidian / GitHub vault</b> &mdash; "
-          "Push transcribed notes as Markdown files to a GitHub repo. "
-          "Point Obsidian at the same repo to see notes appear automatically.</p>";
-  html += "<p><input name='gh_repo' placeholder='GitHub repo (owner/name)' value='" + htmlEscape(cfg::githubRepo()) + "'></p>";
-  html += "<p><input name='gh_branch' placeholder='Branch (default main)' value='" + htmlEscape(cfg::githubBranch()) + "'></p>";
-  html += "<p><input name='gh_dir' placeholder='Vault folder (default VoiceNotes)' value='" + htmlEscape(cfg::githubDir()) + "'></p>";
-  html += "<p class='hint'>Create a fine-grained personal access token with <b>Contents: Read &amp; Write</b> "
-          "at <a href='https://github.com/settings/tokens' target='_blank' style='color:#111'>github.com/settings/tokens</a>.</p>";
-  html += "<p><input name='gh_token' type='password' placeholder='GitHub token (github_pat_...)'></p>";
-  html += "<p><label><input type='checkbox' name='gh_on' value='1'" + String(cfg::githubEnabled() ? " checked" : "") + "> Enable GitHub sync</label></p>";
-  html += "<p><label><input type='checkbox' name='gh_ai' value='1'" + String(cfg::githubAiEnrich() ? " checked" : "") + "> AI titles + topic links (requires OpenAI key)</label></p>";
+  // OpenAI key
+  html += "<div class='form-section'>";
+  html += "<label class='form-label'>OpenAI API key " + badge("set", hasOai, "not set") + "</label>";
+  html += "<input type='password' name='openai' placeholder='sk-\u2026 \u2014 platform.openai.com/api-keys'>";
+  html += "</div>";
 
-  html += "<p class='hint'>Leave a text field blank to keep its current value.</p>";
-  html += "<button type='submit'>Save</button></form></div>";
-  html += "<a class='btn' href='/'>Back to notes</a>";
-  html += "</div></body></html>";
+  html += "<hr class='divider'>";
+
+  // AI enrichment provider
+  html += "<div class='form-section'>";
+  html += "<label class='form-label'>AI enrichment engine <span class='hint' style='display:inline'>(titles &amp; topic links)</span></label>";
+  html += "<div class='radio-group'>";
+  html += "<label><input type='radio' name='enrich_prov' value='1'" + String(enrichProv == 1 ? " checked" : "") + ">Groq</label>";
+  html += "<label><input type='radio' name='enrich_prov' value='0'" + String(enrichProv == 0 ? " checked" : "") + ">OpenAI GPT</label>";
+  html += "</div></div>";
+
+  // Groq enrichment model
+  html += "<div class='form-section' id='groq-model-row' style='" + String(enrichProv == 1 ? "" : "display:none") + "'>";
+  html += "<label class='form-label'>Groq model</label>";
+  html += "<select name='enrich_model'>";
+  const char* models[] = {"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-4-scout-17b-16e-instruct"};
+  const char* modelLabels[] = {"Llama 3.3 70B Versatile (recommended)", "Llama 3.1 8B Instant (fast)", "Llama 4 Scout 17B (experimental)"};
+  for (int m = 0; m < 3; m++) {
+    html += "<option value='" + String(models[m]) + "'" + String(enrichModel == models[m] ? " selected" : "") + ">";
+    html += String(modelLabels[m]) + "</option>";
+  }
+  html += "</select></div>";
+
+  html += "<p><label style='display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer'>";
+  html += "<input type='checkbox' name='gh_ai' value='1'" + String(ghAi ? " checked" : "") + ">";
+  html += "Enable AI enrichment (titles + topic links)</label></p>";
+  html += "<p class='hint' style='margin-top:4px'>Requires either a Groq or OpenAI key above.</p>";
+  html += "</div>"; // end AI card
+
+  // ── GitHub / Obsidian card
+  html += "<div class='card'>";
+  html += "<div class='card-title'>GitHub vault " + badge("active", hasGh, ghOn ? "key missing" : "off") + "</div>";
+  html += "<p class='hint' style='margin-bottom:14px'>Push transcribed notes as Markdown to a GitHub repo. "
+          "Point Obsidian at the same repo to have notes appear automatically.</p>";
+
+  html += "<div class='form-section'><label class='form-label'>Repository <span style='font-weight:400'>(owner/name)</span></label>"
+          "<input type='text' name='gh_repo' placeholder='yourname/vault' value='" + htmlEscape(ghRepo) + "'></div>";
+  html += "<div class='form-section'><label class='form-label'>Branch</label>"
+          "<input type='text' name='gh_branch' placeholder='main' value='" + htmlEscape(ghBranch) + "'></div>";
+  html += "<div class='form-section'><label class='form-label'>Vault folder</label>"
+          "<input type='text' name='gh_dir' placeholder='VoiceNotes' value='" + htmlEscape(ghDir) + "'></div>";
+  html += "<div class='form-section'><label class='form-label'>Personal access token</label>"
+          "<input type='password' name='gh_token' placeholder='github_pat_\u2026'></div>";
+  html += "<p class='hint'>Create a fine-grained token with <b>Contents: Read &amp; Write</b> at "
+          "<a href='https://github.com/settings/tokens' target='_blank'>github.com/settings/tokens</a>.</p>";
+
+  html += "<hr class='divider'>";
+  html += "<p><label style='display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer'>";
+  html += "<input type='checkbox' name='gh_on' value='1'" + String(ghOn ? " checked" : "") + ">";
+  html += "Enable GitHub sync</label></p>";
+  html += "</div>"; // end GitHub card
+
+  html += "<p class='hint' style='margin-bottom:18px'>Leave any key field blank to keep its current value.</p>";
+  html += "<button type='submit' class='btn primary'>Save settings</button>";
+  html += "</form>";
+  html += "</div></body>";
+
+  // Show/hide Groq model selector based on enrichment provider radio
+  html += "<script>"
+          "document.querySelectorAll('input[name=enrich_prov]').forEach(function(r){"
+          "r.addEventListener('change',function(){"
+          "document.getElementById('groq-model-row').style.display=(this.value==='1'?'block':'none');"
+          "});});"
+          "</script>";
+  html += "</html>";
   transferServer.send(200, "text/html", html);
 }
 
+// ─── /provision/save (POST) ───────────────────────────────────────────────────
 void handleProvisionSave() {
   String ssid    = transferServer.hasArg("ssid")   ? transferServer.arg("ssid")   : "";
   String pass    = transferServer.hasArg("pass")   ? transferServer.arg("pass")   : "";
   String groqKey = transferServer.hasArg("groq")   ? transferServer.arg("groq")   : "";
-  String key     = transferServer.hasArg("openai") ? transferServer.arg("openai") : "";
-  ssid.trim(); groqKey.trim(); key.trim();
+  String oaiKey  = transferServer.hasArg("openai") ? transferServer.arg("openai") : "";
+  ssid.trim(); groqKey.trim(); oaiKey.trim();
   bool changed = false;
-  if (ssid.length()    > 0) { cfg::setWifi(ssid, pass);      changed = true; }
-  if (groqKey.length() > 0) { cfg::setGroqKey(groqKey);      changed = true; }
-  if (key.length()     > 0) { cfg::setOpenAiKey(key);        changed = true; }
 
+  if (ssid.length()    > 0) { cfg::setWifi(ssid, pass);     changed = true; }
+  if (groqKey.length() > 0) { cfg::setGroqKey(groqKey);     changed = true; }
+  if (oaiKey.length()  > 0) { cfg::setOpenAiKey(oaiKey);    changed = true; }
+
+  // STT provider
+  if (transferServer.hasArg("stt_prov")) {
+    cfg::setSttProvider((uint8_t)transferServer.arg("stt_prov").toInt());
+    changed = true;
+  }
+
+  // AI enrichment provider + model
+  if (transferServer.hasArg("enrich_prov")) {
+    cfg::setEnrichProvider((uint8_t)transferServer.arg("enrich_prov").toInt());
+    changed = true;
+  }
+  if (transferServer.hasArg("enrich_model")) {
+    String m = transferServer.arg("enrich_model"); m.trim();
+    if (m.length() > 0) { cfg::setEnrichModel(m); changed = true; }
+  }
+
+  // GitHub
   if (transferServer.hasArg("gh_repo")) {
     String r = transferServer.arg("gh_repo"); r.trim();
     if (r.length() > 0) { cfg::setGithubRepo(r); changed = true; }
@@ -539,28 +786,46 @@ void handleProvisionSave() {
 
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>Amar Note Setup</title>" + portalCss() + "</head><body><div class='wrap'>";
-  html += "<div class='card'><h1>" + String(changed ? "saved" : "no change") + "</h1>";
-  html += "<p class='hint'>" + String(changed
-            ? "Settings stored to the device. Re-open Transfer or Sync to use them."
-            : "Nothing was submitted.") + "</p>";
-  html += "<a class='btn' href='/provision'>Back to setup</a></div></div></body></html>";
+                "<title>Amar Note \u00b7 Setup</title>" + portalCss() + "</head><body>";
+  html += portalHeader("Setup", "setup");
+  html += "<div class='wrap'>";
+  html += "<div class='card' style='margin-top:24px'>";
+  html += "<div class='page-title' style='margin-top:0'>" + String(changed ? "saved \u2713" : "no change") + "</div>";
+  html += "<p class='hint' style='margin:10px 0 18px'>" + String(changed
+    ? "Settings stored on the device. Re-open Transfer or Sync to use them."
+    : "Nothing was submitted.") + "</p>";
+  html += "<div class='actions'>";
+  html += "<a class='btn primary' href='/provision'>Back to setup</a>";
+  html += "<a class='btn' href='/'>Notes</a>";
+  html += "</div></div></div></body></html>";
   transferServer.send(200, "text/html", html);
 }
 
+// ─── /ota ────────────────────────────────────────────────────────────────────
 void handleOtaPage() {
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>Amar Note Update</title>" + portalCss() + "</head><body><div class='wrap'>";
-  html += "<div class='top'><div><h1>amar note<br>update</h1>"
-          "<div class='sub'>firmware " FW_VERSION "</div></div></div>";
+                "<title>Amar Note \u00b7 Update</title>" + portalCss() + "</head><body>";
+  html += portalHeader("Update", "update");
+  html += "<div class='wrap'>";
+  html += "<div class='page-title'>update</div>";
+  html += "<div class='page-sub'>firmware " FW_VERSION "</div>";
+
   html += "<div class='card'>";
-  html += "<p class='hint'>Paste an HTTPS URL to a compiled firmware .bin. "
+  html += "<div class='card-title'>over-the-air flash</div>";
+  html += "<p class='hint' style='margin-bottom:14px'>Paste an HTTPS URL to a compiled <code>.bin</code> firmware file. "
           "The device verifies the server certificate, flashes the inactive OTA slot, "
-          "and reboots into it (rolling back automatically if it fails to boot).</p>";
-  html += "<form action='/ota/run' method='post'>"
-          "<p><input name='url' placeholder='https://host/amar-note.bin'></p>"
-          "<button type='submit'>Update firmware</button></form></div>";
+          "and reboots into it &mdash; rolling back automatically if it fails to boot.</p>";
+  html += "<form action='/ota/run' method='post'>";
+  html += "<div class='form-section'><label class='form-label'>Firmware URL</label>"
+          "<input type='url' name='url' placeholder='https://host/amar-note.bin'></div>";
+  html += "<button type='submit' class='btn primary'>Flash firmware</button>";
+  html += "</form>";
+  html += "<hr class='divider'>";
+  html += "<p class='hint'>\u26A0\uFE0F Keep the device plugged in during the update. "
+          "Do not close this page until the device reboots. "
+          "If the update fails, the device stays on the current firmware automatically.</p>";
+  html += "</div>";
   html += "<a class='btn' href='/'>Back to notes</a>";
   html += "</div></body></html>";
   transferServer.send(200, "text/html", html);
@@ -568,14 +833,15 @@ void handleOtaPage() {
 
 void handleOtaRun() {
   if (!transferServer.hasArg("url") || transferServer.arg("url").length() == 0) {
-    transferServer.send(400, "text/plain", "Missing url");
-    return;
+    transferServer.send(400, "text/plain", "Missing url"); return;
   }
   String url = transferServer.arg("url");
   transferServer.send(200, "text/html",
-    "<!doctype html><meta charset='utf-8'><h1>Updating&hellip;</h1>"
+    "<!doctype html><meta charset='utf-8'>"
+    "<style>body{font-family:-apple-system,sans-serif;padding:40px;background:#f3f0e9;color:#111}</style>"
+    "<h1 style='font-size:36px;font-weight:800;letter-spacing:-.04em;margin-bottom:16px'>Updating&hellip;</h1>"
     "<p>Flashing firmware. The device reboots automatically if the update succeeds. "
-    "If it fails it stays on the current version &mdash; reopen Transfer and retry.</p>");
+    "If it fails, it stays on the current version &mdash; reopen Transfer and retry.</p>");
   delay(250);
 
   WiFiClientSecure client;
@@ -590,18 +856,20 @@ void handleOtaRun() {
     Serial.println("[OTA] no update available");
 }
 
+// ─── Server setup ─────────────────────────────────────────────────────────────
 void setupTransferServer() {
-  transferServer.on("/", HTTP_GET, handlePortalRoot);
-  transferServer.on("/provision", HTTP_GET, handleProvisionPage);
-  transferServer.on("/provision/save", HTTP_POST, handleProvisionSave);
-  transferServer.on("/ota", HTTP_GET, handleOtaPage);
-  transferServer.on("/ota/run", HTTP_POST, handleOtaRun);
-  transferServer.on("/tags", HTTP_GET, handleTagsPage);
-  transferServer.on("/tag/add", HTTP_GET, handleTagAdd);
-  transferServer.on("/tag/delete", HTTP_GET, handleTagDelete);
-  transferServer.on("/note/delete", HTTP_GET, handleNoteDelete);
-  transferServer.on("/api/notes", HTTP_GET, handlePortalJson);
-  transferServer.on("/export.txt", HTTP_GET, handleExportTxt);
+  transferServer.on("/",                HTTP_GET,  handlePortalRoot);
+  transferServer.on("/api/status",      HTTP_GET,  handleApiStatus);
+  transferServer.on("/provision",       HTTP_GET,  handleProvisionPage);
+  transferServer.on("/provision/save",  HTTP_POST, handleProvisionSave);
+  transferServer.on("/ota",             HTTP_GET,  handleOtaPage);
+  transferServer.on("/ota/run",         HTTP_POST, handleOtaRun);
+  transferServer.on("/tags",            HTTP_GET,  handleTagsPage);
+  transferServer.on("/tag/add",         HTTP_GET,  handleTagAdd);
+  transferServer.on("/tag/delete",      HTTP_GET,  handleTagDelete);
+  transferServer.on("/note/delete",     HTTP_GET,  handleNoteDelete);
+  transferServer.on("/api/notes",       HTTP_GET,  handlePortalJson);
+  transferServer.on("/export.txt",      HTTP_GET,  handleExportTxt);
   transferServer.on("/txt",   HTTP_GET, [](){ sendFileByNum("txt", "text/plain", true); });
   transferServer.on("/wav",   HTTP_GET, [](){ sendFileByNum("wav", "audio/wav",  true); });
   transferServer.on("/audio", HTTP_GET, [](){ sendFileByNum("wav", "audio/wav",  false); });
