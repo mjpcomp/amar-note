@@ -13,6 +13,7 @@ extern int       listCursor;
 extern int       tagCursor;
 extern int       menuCursor;
 extern int       settingsCursor;
+extern int       eraseAllCursor;
 extern int       activeFilter;
 extern int       lastRecNum;
 
