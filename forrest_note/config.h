@@ -118,8 +118,8 @@
 // ---------------------------------------------------------------------------
 #define DEVICE_TZ_POSIX  "PST8PDT,M3.2.0,M11.1.0"   // US Pacific (UTC-8 / UTC-7 DST)
 
-/* Firmware version */
+/* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
 #define FIRMWARE_VERSION  "v1.0"
-#define FW_VERSION        "v1.0"
+#define FW_VERSION        FIRMWARE_VERSION
 
 #endif // CONFIG_H
