@@ -12,9 +12,9 @@ extern "C" {
 #include "src/audio/audio_bsp.h"
 }
 
-// Global sound switch.
-// Used by the .ino to disable sounds during recording.
-static bool amarSoundEnabled = true;
+// Global sound switch — defined in sounds.cpp, extern here so all
+// translation units share a single instance (avoids ODR/static-copy bug).
+extern bool amarSoundEnabled;
 
 inline void amarSoundSetEnabled(bool enabled) {
   amarSoundEnabled = enabled;
@@ -94,8 +94,6 @@ inline void soundBack() {
   playToneUI(650.0f, 18, 0.10f);
   soundDisable();
 }
-
-
 
 inline void soundRecordingStart() {
   if (!amarSoundEnabled) return;
