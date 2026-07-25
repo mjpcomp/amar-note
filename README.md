@@ -257,6 +257,7 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 - **Groq transcription fails** → confirm your Groq key is saved and **STT Provider** is set to **Groq** in the portal. Groq's free tier has per-minute rate limits; if you hit them, switch back to OpenAI.
 - **Groq enrichment fails or returns empty** → check your Groq key and selected model. The `llama-4-scout` model has a lower rate limit (15 RPM); switch to `llama-3.3-70b-versatile` or `llama-3.1-8b-instant` if you hit limits. Alternatively switch enrichment provider to OpenAI.
 - **Note timestamps show wrong timezone** → edit `DEVICE_TZ_POSIX` in `config.h` and reflash. Common zone strings are listed there.
+- **Sounds toggle in Settings has no effect** → you are likely running a build from before the `sounds.cpp` ODR fix. The old `sounds.h` used `static bool amarSoundEnabled`, which gave every `.cpp` its own private copy so writes from one file had no effect on reads in another. Pull the latest code and rebuild — `sounds.cpp` now holds the single definition.
 
 ---
 
