@@ -71,9 +71,10 @@ bool rtcWriteUtcTm(const struct tm& utc) {
 }
 
 time_t utcTmToEpoch(struct tm utc) {
-  setenv("TZ", "UTC0", 1);
-  tzset();
-  return mktime(&utc);
+  // timegm() interprets the struct tm as UTC without touching the TZ env var,
+  // avoiding the latent race where setenv("TZ","UTC0") + mktime() would
+  // temporarily clobber local-time reads elsewhere.
+  return timegm(&utc);
 }
 
 bool rtcSyncSystemFromChip() {
