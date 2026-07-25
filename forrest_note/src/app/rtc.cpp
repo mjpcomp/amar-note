@@ -8,7 +8,6 @@
 
 extern "C" {
 #include "../../src/i2c_bsp/i2c_bsp.h"
-#include "../../config.h"
 }
 
 uint8_t bcdToDec(uint8_t v) { return ((v >> 4) * 10) + (v & 0x0F); }
@@ -71,19 +70,9 @@ bool rtcWriteUtcTm(const struct tm& utc) {
 }
 
 time_t utcTmToEpoch(struct tm utc) {
-  // timegm() is not available on the ESP32 Arduino/ESP-IDF toolchain.
-  // Emulate it by saving the current TZ (typically DEVICE_TZ_POSIX after
-  // NTP sync), forcing UTC0 so mktime() treats the struct tm as UTC,
-  // then restoring — so local-time reads elsewhere are not clobbered.
-  char* prevTz = getenv("TZ");
-  String saved = prevTz ? String(prevTz) : String();
   setenv("TZ", "UTC0", 1);
   tzset();
-  time_t epoch = mktime(&utc);
-  if (saved.length()) setenv("TZ", saved.c_str(), 1);
-  else                unsetenv("TZ");
-  tzset();
-  return epoch;
+  return mktime(&utc);
 }
 
 bool rtcSyncSystemFromChip() {
@@ -93,9 +82,6 @@ bool rtcSyncSystemFromChip() {
   if (epoch < 1700000000) { timeReady = false; return false; }
   timeval tv; tv.tv_sec = epoch; tv.tv_usec = 0;
   settimeofday(&tv, nullptr);
-  // Apply local timezone so getLocalTime() returns correct local time on wake
-  setenv("TZ", DEVICE_TZ_POSIX, 1);
-  tzset();
   timeReady = true;
   return true;
 }
@@ -120,7 +106,6 @@ String rtcUtcIso() {
 
 bool syncTimeFromNTP(uint32_t timeoutMs) {
   if (WiFi.status() != WL_CONNECTED) return false;
-  // Sync NTP as UTC (offsets are zero — local time is applied via DEVICE_TZ_POSIX below)
   configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   uint32_t start = millis();
   struct tm timeinfo;
@@ -128,9 +113,6 @@ bool syncTimeFromNTP(uint32_t timeoutMs) {
     if (getLocalTime(&timeinfo, 500)) {
       time_t now = time(nullptr);
       if (now > 1700000000) {
-        // Apply local timezone: getLocalTime() will now return local time
-        setenv("TZ", DEVICE_TZ_POSIX, 1);
-        tzset();
         timeReady = true;
         rtcSyncChipFromSystem();
         return true;
