@@ -7,6 +7,7 @@
 #include <vector>
 #include "driver/i2c_master.h"
 #include "esp_heap_caps.h"
+#include "USB.h"
 
 extern "C" {
 #include "config.h"
@@ -293,6 +294,12 @@ void setup() {
   loadIndex();
   Serial.printf("[SD] %d notes\n", (int)noteIndex.size());
 
+  // Register USB MSC (with mediaPresent=false) then start USB stack.
+  // All USB classes must be registered before USB.begin() is called.
+  // CDCOnBoot provides Serial; MSC registers here for on-demand use.
+  usb_msc_init();
+  USB.begin();
+
   if (wakeToMenuRequested) {
     menuCursor = 0;
     state = STATE_MENU;
@@ -490,7 +497,6 @@ void loop() {
       } else {
         // menuCursor == 4: USB Drive
         state = STATE_USB_MSC;
-        showUsbMsc();
         enterMscMode();
         // enterMscMode() blocks until hold-REC; on return, SD is re-mounted.
         loadIndex();
