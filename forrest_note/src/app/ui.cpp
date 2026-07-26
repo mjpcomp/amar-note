@@ -316,17 +316,79 @@ void showBatteryLow(int pct) {
   refresh();
 }
 
+// ─── Recording screen: animated microphone with sound arcs ────────────────────────────────────
+//
+// Layout (200×200, black bg, all white):
+//   Mic barrel centre: cx=100, cy=88
+//   Barrel: 22px wide, 36px tall rounded rect  (cx-11, cy-18..cy+18)
+//   Dome cap: semicircle r=11 at the top        (cx, cy-18)
+//   Neck pickup arc: strokeCircle r=22, masked top half away
+//   Stem: 3px wide, 14px tall below barrel      (cx-1, cy+18..cy+32)
+//   Base: hline 30px centred at cy+32
+//   Sound arcs: 2 strokeCircles centred on mic midpoint (cx, cy),
+//               radii = recCircleR+8 and recCircleR+20,
+//               left+right halves only (top/bottom masked black)
+
 static float recCircleR = 24.0f;
+
+// Draw the static microphone body centred at (cx, micCy).
+// micCy is the vertical centre of the barrel.
+static void drawMicBody(int cx, int micCy) {
+  // Barrel
+  fillRoundRect(cx - 11, micCy - 18, 22, 36, 10, WHITE);
+  // Dome cap (top semicircle already covered by the rounded top of the barrel,
+  // but we add a filled circle at the very top to make it look more capsule-like)
+  fillCircle(cx, micCy - 18, 11, WHITE);
+
+  // Neck pickup arc — a full strokeCircle r=22 then mask the top half black
+  strokeCircle(cx, micCy, 22, 3, WHITE);
+  fillRect(cx - 26, micCy - 26, 52, 28, BLACK);  // erase top half of arc
+
+  // Stem
+  fillRect(cx - 1, micCy + 18, 3, 14, WHITE);
+  // Base
+  fillRect(cx - 15, micCy + 31, 30, 3, WHITE);
+}
+
+// Draw two animated sound-arcs around the mic.
+// arcR = current smoothed level radius (24..68).
+// Arcs are drawn as full strokeCircles, then the top and bottom halves
+// are masked with black rectangles so only left & right sides are visible.
+static void drawSoundArcs(int cx, int micCy, int arcR) {
+  if (arcR < 26) return;  // too small to be visible outside the mic body
+
+  // Outer arc (slightly thinner)
+  strokeCircle(cx, micCy, arcR,      2, WHITE);
+  // Inner arc — closer to the mic
+  int inner = arcR - 12;
+  if (inner > 24) strokeCircle(cx, micCy, inner, 2, WHITE);
+
+  // Mask top quarter (above mic dome) and bottom quarter (below base)
+  // so only the left & right side fans show through.
+  int maskH = arcR / 2 + 2;
+  fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, BLACK);  // top
+  fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, BLACK);  // bottom
+}
 
 static void drawRecordingScreen(uint32_t elapsedMs, int level) {
   (void)elapsedMs;
   fillRect(0, 0, W, H, BLACK);
-  float target = 24.0f + (float)level * 44.0f / 152.0f;
-  if (target < 24.0f) target = 24.0f;
+
+  // Smooth the level toward the target radius — same logic as before.
+  float target = 26.0f + (float)level * 42.0f / 152.0f;
+  if (target < 26.0f) target = 26.0f;
   if (target > 68.0f) target = 68.0f;
   float a = (target > recCircleR) ? 0.55f : 0.18f;
   recCircleR += (target - recCircleR) * a;
-  fillCircle(W / 2, H / 2, (int)(recCircleR + 0.5f), WHITE);
+
+  int cx     = W / 2;       // 100
+  int micCy  = 90;          // mic barrel centre — slightly above screen centre
+  int arcR   = (int)(recCircleR + 0.5f);
+
+  // Sound arcs first (behind mic body)
+  drawSoundArcs(cx, micCy, arcR);
+  // Mic body on top
+  drawMicBody(cx, micCy);
 }
 
 void showRecording() {
