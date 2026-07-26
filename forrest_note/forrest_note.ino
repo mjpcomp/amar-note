@@ -376,17 +376,21 @@ void handleSerialConfig() {
 // Called at the top of loop() before button handling.  Returns true if a touch
 // event was consumed (so the caller can skip button polling for this tick).
 //
-// Hit-zone geometry mirrors the layout constants in ui.cpp exactly:
+// Hit-zone geometry mirrors the layout constants in ui.cpp exactly.
 //
-//   STATE_IDLE       whole screen  → start recording (same as REC button)
-//   STATE_MENU       tiles/rows    → select item (REC) or implicit navigate
+// Recording is intentionally excluded from touch: REC button is the only way
+// to start or stop a recording on both hardware variants.  Touch on the idle
+// screen is a no-op so an accidental brush cannot silently begin a recording.
+//
+//   STATE_IDLE       (no action — falls through to button handler)
+//   STATE_MENU       tiles/rows    → select item
 //   STATE_SETTINGS   rows          → select item
-//   STATE_TAG_SELECT pills         → select tag or next
+//   STATE_TAG_SELECT pills         → select tag
 //   STATE_TAG_BROWSER big card     → drill into list; bottom strip = back
 //   STATE_NOTE_LIST  cards         → open detail; bottom strip = back
-//   STATE_NOTE_DETAIL top area     → play; bottom strip = back
+//   STATE_NOTE_DETAIL top area     → play; mid = scroll/next; bottom strip = back
 //   STATE_DELETE_CONFIRM halves    → confirm (left) / cancel (right)
-//   STATE_TRANSFER   bottom strip  → hold-rec equivalent (long press sim)
+//   STATE_TRANSFER   anywhere      → exit transfer mode
 //
 static bool handleTouch() {
   if (state == STATE_RECORDING || state == STATE_USB_MSC) return false;
@@ -396,12 +400,8 @@ static bool handleTouch() {
 
   resetActivity();
 
-  // ── IDLE: tap anywhere to start recording ──────────────────────────────
-  if (state == STATE_IDLE) {
-    g_stopRecording = false;
-    startRecordFlow();
-    return true;
-  }
+  // STATE_IDLE: touch does nothing — recording is button-only on all variants.
+  if (state == STATE_IDLE) return false;
 
   // ── MENU ───────────────────────────────────────────────────────────────
   // Row A tiles: Notes (x=10,y=30,w=88,h=44)  Tags (x=102,y=30,w=88,h=44)
