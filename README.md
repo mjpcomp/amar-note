@@ -13,6 +13,7 @@ Tap a button, talk, tap again. A few seconds later a tidy Markdown note — with
 - **AI note cleanup (the headline upgrade):** a language model rewrites your messy, filler-filled speech into **coherent, succinct prose**, generates a **title**, a **one-sentence summary**, and **topic links** — automatically, every time you sync.
 - **Verbatim safety net:** the original raw transcript is tucked into a foldable callout, so nothing you said is ever lost.
 - **Syncs to GitHub** as clean Markdown with YAML frontmatter and tags — drop it into **Obsidian** and your notes organise themselves.
+- **USB Mass Storage** — mount the device's SD card directly on your computer, no cables or apps required.
 - **No app, no account lock-in, no cloud middleman** — it talks directly to your chosen STT and enrichment providers and to *your* GitHub repo.
 
 ---
@@ -55,11 +56,14 @@ Credit where it's due — the original firmware already provided: voice **record
 | 🎤 **Groq STT (free tier)** | ➕ New | Optional Groq `whisper-large-v3-turbo` transcription — no credit card needed. Switch providers in the portal. |
 | 🤖 **Selectable AI enrichment backend** | ➕ New | AI note cleanup can use **OpenAI `gpt-4o-mini`** (default) or any of three **Groq Llama models** (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `llama-4-scout-17b-16e-instruct`). Switch provider and model in the portal — no reflash needed. |
 | 🗂️ **Portal provider links** | ➕ New | Setup page now shows direct links to OpenAI, Groq, and GitHub PAT pages. |
+| 🖥️ **Portal visual redesign** | 🔁 Changed | Captive-portal UI overhauled: battery level + real-time clock shown in the header, STT provider and enrichment model each have their own dedicated selector UI. |
 | ⏱️ **POSIX timezone** | 🔁 Changed | Replaced the vestigial `LOCAL_TIME_OFFSET_MIN` constant with a proper DST-aware POSIX TZ string (`DEVICE_TZ_POSIX`). Note timestamps and calendar events now reflect real local time. |
 | 🔌 **Correct hardware pins** | 🔁 Changed | All EPD SPI, I2C, power-control, and button pins corrected to the official Waveshare ESP32-S3-ePaper-1.54 definitions. |
 | 📡 **HTTPS chunked read fix** | 🔁 Changed | HTTP client reads in 512-byte chunks instead of single bytes — eliminates timeout drops on slow connections. |
 | 🏷️ **Dirty-tag MOC rebuild** | 🔁 Changed | Tag index (`_MOC`) files are only rewritten when their tag set actually changes, not on every sync. |
 | 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
+| 💾 **USB Mass Storage** | ➕ New | Menu item **"USB Drive"** mounts the SD card as a USB MSC drive on any host computer — browse, copy, or delete files directly. Hold REC to exit MSC mode; the SD remounts and the note index reloads automatically. Requires ESP32 Arduino core ≥ 2.0. |
+| 🕒 **Portable UTC epoch conversion** | 🔁 Changed | `utcTmToEpoch()` now uses a portable `mktime()` emulation (TZ save/restore) instead of `timegm()`, which is not available in the ESP32 Arduino/ESP-IDF toolchain. |
 
 ---
 
@@ -179,6 +183,28 @@ A **tap** is any press released before the long-hold threshold (~450 ms); a **lo
 | **Erase all notes** | **Settings → Erase All** |
 | **Wake to menu** | Hold **power** while powering on |
 | **Wake straight to record** | Hold **record** while powering on |
+| **USB Drive mode** | Menu → **USB Drive** → tap **record** → hold **record** to exit |
+
+---
+
+## 💾 USB Mass Storage
+
+Select **USB Drive** from the main menu and tap **record**. The e-ink screen shows:
+
+```
+USB Storage
+───────────
+  Connected
+
+safely eject before
+      exiting
+
+ [hold REC to exit]
+```
+
+The SD card appears on your host computer as a standard USB drive — browse, copy, rename, or delete files directly. When done, safely eject from your OS, then hold **record** on the device to exit. The SD card remounts automatically and the note index reloads.
+
+> **Requirement:** ESP32 Arduino core ≥ 2.0 (for `USB.h` / `USBMSC.h`). The board must be connected via USB-C to a host that supports USB OTG device mode.
 
 ---
 
@@ -258,6 +284,8 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 - **Groq enrichment fails or returns empty** → check your Groq key and selected model. The `llama-4-scout` model has a lower rate limit (15 RPM); switch to `llama-3.3-70b-versatile` or `llama-3.1-8b-instant` if you hit limits. Alternatively switch enrichment provider to OpenAI.
 - **Note timestamps show wrong timezone** → edit `DEVICE_TZ_POSIX` in `config.h` and reflash. Common zone strings are listed there.
 - **Sounds toggle in Settings has no effect** → you are likely running a build from before the `sounds.cpp` ODR fix. The old `sounds.h` used `static bool amarSoundEnabled`, which gave every `.cpp` its own private copy so writes from one file had no effect on reads in another. Pull the latest code and rebuild — `sounds.cpp` now holds the single definition.
+- **USB Drive mode not available / compile error about `USB.h`** → USB Mass Storage requires **ESP32 Arduino core ≥ 2.0**. Run `arduino-cli core install esp32:esp32@3.2.0` (or later) and rebuild.
+- **USB Drive mode: SD card doesn't appear on host** → ensure you're using a USB-C cable that supports data (not charge-only). The ESP32-S3 acts as a USB OTG device; some hubs don't pass OTG — connect directly to the host port.
 
 ---
 
