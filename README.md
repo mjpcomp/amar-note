@@ -58,7 +58,8 @@ Credit where it's due — the original firmware already provided: voice **record
 | 🗂️ **Portal provider links** | ➕ New | Setup page now shows direct links to OpenAI, Groq, and GitHub PAT pages. |
 | 🖥️ **Portal visual redesign** | 🔁 Changed | Captive-portal UI overhauled: battery level + real-time clock shown in the header, STT provider and enrichment model each have their own dedicated selector UI. |
 | ⏱️ **POSIX timezone** | 🔁 Changed | Replaced the vestigial `LOCAL_TIME_OFFSET_MIN` constant with a proper DST-aware POSIX TZ string (`DEVICE_TZ_POSIX`). Note timestamps and calendar events now reflect real local time. |
-| 🔌 **Correct hardware pins** | 🔁 Changed | All EPD SPI, I2C, power-control, and button pins corrected to the official Waveshare ESP32-S3-ePaper-1.54 definitions. |
+| 👆 **Touch screen support** | ➕ New | Full support for the **ESP32-S3-Touch-ePaper-1.54** variant. The touch layer is additive — all menus and navigation work by direct tap. Buttons remain fully functional on both variants (see [Hardware](#-hardware)). |
+| 🔌 **Correct hardware pins** | 🔁 Changed | All EPD SPI, I2C, power-control, and button pins corrected to the official Waveshare ESP32-S3-ePaper-1.54 / Touch-ePaper-1.54 definitions. |
 | 📡 **HTTPS chunked read fix** | 🔁 Changed | HTTP client reads in 512-byte chunks instead of single bytes — eliminates timeout drops on slow connections. |
 | 🏷️ **Dirty-tag MOC rebuild** | 🔁 Changed | Tag index (`_MOC`) files are only rewritten when their tag set actually changes, not on every sync. |
 | 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
@@ -69,16 +70,25 @@ Credit where it's due — the original firmware already provided: voice **record
 
 ## 🧰 Hardware
 
-This firmware is built for the **Waveshare ESP32-S3 1.54″ e-Paper AIoT Development Board**:
+Amar Note supports **two Waveshare ESP32-S3 1.54″ e-Paper boards** — pick whichever suits you:
 
-> 🛒 **Reference board:** [Waveshare ESP32-S3 1.54inch e-Paper AIoT Dev Board](https://www.waveshare.com/esp32-s3-epaper-1.54.htm) (the **B/W**, non-"G" variant).
+| Board | Touch | Buttons | Notes |
+|---|---|---|---|
+| **[ESP32-S3-ePaper-1.54](https://www.waveshare.com/esp32-s3-epaper-1.54.htm)** | ✗ | ✅ REC + PWR | Original variant — button-only |
+| **[ESP32-S3-Touch-ePaper-1.54](https://www.waveshare.com/esp32-s3-touch-epaper-1.54.htm)** | ✅ FT6336 | ✅ REC + PWR | Touch adds tap navigation; buttons still work |
+
+> **Note:** The two Waveshare boards share the same MCU, display, audio codec, and pin assignments. They use the same firmware binary — no compile-time flag needed. The touch driver initialises on startup; on the non-touch board it silently finds no FT6336 device and the touch layer is a no-op.
+
+Both boards are the **B/W** (black-and-white, non-"G") 200×200 e-paper variant.
+
+### Common hardware specs
 
 - **MCU:** ESP32-S3 (Xtensa LX7 dual-core @ 240 MHz) — **N8R8**: 8 MB flash + 8 MB OPI PSRAM
 - **Display:** 1.54″ **200×200** e-paper (black/white)
 - **Audio:** ES8311 codec + ES7210 ADC mic + speaker
 - **Storage:** microSD (SD_MMC 1-bit)
 - **Extras:** RTC (PCF85063), SHTC3 temp/humidity, LiPo charge management
-- **Buttons:** Record (GPIO0 / BOOT) and Power (GPIO18)
+- **Buttons:** Record (GPIO0 / BOOT) and Power (GPIO18) — present on both variants
 - **Wireless:** 2.4 GHz Wi-Fi + BLE 5
 
 ### 🧊 3D-printable case
@@ -89,7 +99,7 @@ The printable enclosure is the original creator's hardware design — download f
 
 ## 📋 What you'll need
 
-1. Assembled Waveshare ESP32-S3 1.54″ e-Paper board + USB-C cable.
+1. Assembled Waveshare ESP32-S3-ePaper-1.54 **or** ESP32-S3-Touch-ePaper-1.54 board + USB-C cable.
 2. *(For AI enrichment with OpenAI)* An **OpenAI API key** — <https://platform.openai.com/api-keys>.
 3. *(Optional, free alternative for both STT and enrichment)* A **Groq API key** — <https://console.groq.com/keys>.
 4. A **GitHub repo** for notes + a fine-grained PAT with **Contents: Read and write** — <https://github.com/settings/tokens>.
@@ -168,6 +178,8 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
 
 ## 🎛️ Using it
 
+### Buttons (both variants)
+
 Two physical buttons control everything: **record** (GPIO0 / BOOT) and **power** (GPIO18).
 A **tap** is any press released before the long-hold threshold (~450 ms); a **long-hold** crosses that threshold and fires immediately — no need to release first.
 
@@ -184,6 +196,25 @@ A **tap** is any press released before the long-hold threshold (~450 ms); a **lo
 | **Wake to menu** | Hold **power** while powering on |
 | **Wake straight to record** | Hold **record** while powering on |
 | **USB Drive mode** | Menu → **USB Drive** → tap **record** → hold **record** to exit |
+
+### Touch screen (ESP32-S3-Touch-ePaper-1.54 only)
+
+On the touch variant the FT6336 capacitive controller adds direct tap navigation across all menus. **Buttons remain fully functional** — touch and buttons work side by side.
+
+| Touch gesture | Action |
+|---|---|
+| **Tap anywhere (idle screen)** | Start recording |
+| **Tap a menu tile or row** | Select that item (equivalent to REC) |
+| **Tap a settings row** | Activate that setting |
+| **Tap a tag pill** | Choose that tag after recording |
+| **Tap the big tag card** | Drill into that tag's note list |
+| **Tap outside the tag card** | Cycle to the next tag |
+| **Tap a note card** | Open note detail |
+| **Tap upper area of note detail** | Play back the recording |
+| **Tap lower area of note detail** | Scroll to next page / advance to next note |
+| **Tap bottom strip (y ≥ 180)** | Go back (equivalent to long-hold REC) |
+
+> **Recording is always button-driven.** Touch can *start* a recording (tap the idle screen), but only the **record button** stops it. This is intentional — it prevents accidental touch-stops mid-sentence and keeps the recording UX consistent across both hardware variants.
 
 ---
 
@@ -286,6 +317,7 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 - **Sounds toggle in Settings has no effect** → you are likely running a build from before the `sounds.cpp` ODR fix. The old `sounds.h` used `static bool amarSoundEnabled`, which gave every `.cpp` its own private copy so writes from one file had no effect on reads in another. Pull the latest code and rebuild — `sounds.cpp` now holds the single definition.
 - **USB Drive mode not available / compile error about `USB.h`** → USB Mass Storage requires **ESP32 Arduino core ≥ 2.0**. Run `arduino-cli core install esp32:esp32@3.2.0` (or later) and rebuild.
 - **USB Drive mode: SD card doesn't appear on host** → ensure you're using a USB-C cable that supports data (not charge-only). The ESP32-S3 acts as a USB OTG device; some hubs don't pass OTG — connect directly to the host port.
+- **Touch not responding (Touch-ePaper variant)** → confirm I2C is up; the FT6336 sits at address `0x38` on the shared I2C bus. A failed I2C init will print `[touch] FT6336 init OK` to serial — if that line is absent, check solder joints on SDA (GPIO47) / SCL (GPIO48). Touch issues never affect the non-touch board.
 
 ---
 
