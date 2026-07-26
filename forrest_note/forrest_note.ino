@@ -44,15 +44,16 @@ extern "C" {
 #include "src/app/record.h"
 #include "src/app/config_store.h"
 #include "src/app/obsidian.h"
+#include "src/app/usb_msc.h"
 
 // All pin, timing, path and threshold constants live in config.h.
 
-// ─── Content arrays ────────────────────────────────────────────────────────────────────────────────
+// ─── Content arrays ──────────────────────────────────────────────────────────────────────────────────
 const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Buy", "Private" };
-const char* MENU_ITEMS[]     = { "Notes", "Tags", "Sync", "Settings" };
+const char* MENU_ITEMS[]     = { "Notes", "Tags", "Sync", "Settings", "USB Drive" };
 const char* SETTINGS_ITEMS[] = { "Sounds", "Transfer", "Device", "Erase All", "Reset" };
 
-// ─── Global variable definitions ─────────────────────────────────────────────────────────────────────────
+// ─── Global variable definitions ─────────────────────────────────────────────────────────────────────────────────────
 board_power_bsp_t      board(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
 epaper_driver_display* display = nullptr;
 
@@ -97,13 +98,13 @@ uint32_t batWarnShowUntilMs = 0;
 char tags[20][32];
 int  tagCount = 0;
 
-// ─── Power latch ─────────────────────────────────────────────────────────────────────────────────────
+// ─── Power latch ─────────────────────────────────────────────────────────────────────────────────────────
 void keepBatteryPowerOn() {
   pinMode(PWR_HOLD_PIN, OUTPUT);
   digitalWrite(PWR_HOLD_PIN, HIGH);
 }
 
-// ─── Flow functions ───────────────────────────────────────────────────────────────────────────────────
+// ─── Flow functions ───────────────────────────────────────────────────────────────────────────────────────
 void startRecordFlow() {
   state = STATE_RECORDING;
   showRecording();
@@ -233,7 +234,7 @@ void startTransferMode() {
   showTransferMode(transferUrl.c_str());
 }
 
-// ─── Setup ────────────────────────────────────────────────────────────────────────────────────────
+// ─── Setup ─────────────────────────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -369,7 +370,7 @@ void loop() {
   handleSerialConfig();
   serviceDisplay();
 
-  if (state != STATE_RECORDING && state != STATE_TRANSFER) {
+  if (state != STATE_RECORDING && state != STATE_TRANSFER && state != STATE_USB_MSC) {
     if (millis() - lastActivityMs > ULTRA_SLEEP_MS) {
       enterUltraSleep();
       return;
@@ -424,7 +425,6 @@ void loop() {
   }
 
   if (state == STATE_IDLE) {
-    // Tap-to-start: EV_SINGLE on rec fires startRecordFlow() immediately with no hold wait.
     ButtonEvent recEv = readButtonEvent(BTN_REC);
     if (recEv == EV_SINGLE) {
       g_stopRecording = false;
@@ -442,7 +442,6 @@ void loop() {
   }
 
   else if (state == STATE_RECORDING) {
-    // Tap-to-stop: EV_SINGLE on rec during recording sets the stop flag consumed by record().
     ButtonEvent recEv = readButtonEvent(BTN_REC);
     if (recEv == EV_SINGLE) {
       g_stopRecording = true;
@@ -484,10 +483,19 @@ void loop() {
         showTagBrowser(tagCursor);
       } else if (menuCursor == 2) {
         startSyncFlow();
-      } else {
+      } else if (menuCursor == 3) {
         settingsCursor = 0;
         state = STATE_SETTINGS;
         showSettings(settingsCursor);
+      } else {
+        // menuCursor == 4: USB Drive
+        state = STATE_USB_MSC;
+        showUsbMsc();
+        enterMscMode();
+        // enterMscMode() blocks until hold-REC; on return, SD is re-mounted.
+        loadIndex();
+        state = STATE_MENU;
+        showMenu(menuCursor);
       }
     } else if (rec == EV_LONG) {
       soundBack();
