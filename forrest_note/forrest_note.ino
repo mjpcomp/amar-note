@@ -52,7 +52,7 @@ extern "C" {
 // ─── Content arrays ──────────────────────────────────────────────────────────
 const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Buy", "Private" };
 const char* MENU_ITEMS[]     = { "Notes", "Tags", "Sync", "Settings", "USB Drive" };
-const char* SETTINGS_ITEMS[] = { "Sounds", "Transfer", "Device", "Erase All", "Reset" };
+const char* SETTINGS_ITEMS[] = { "Sounds", "Transfer", "Device", "Erase All", "idle rec", "Reset" };
 
 // ─── Global variable definitions ─────────────────────────────────────────────
 board_power_bsp_t      board(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
@@ -381,11 +381,11 @@ void handleSerialConfig() {
 // Recording is intentionally excluded from touch: REC button is the only way
 // to start or stop a recording on both hardware variants.
 //
-// Touch on the idle screen is disabled by default (TOUCH_IDLE_STARTS_RECORDING = 0
-// in config.h) to prevent an accidental brush from silently beginning a recording.
-// Set TOUCH_IDLE_STARTS_RECORDING to 1 and reflash to restore the original behaviour.
+// Touch on the idle screen is off by default (cfg::idleTouchRecord() == false)
+// to prevent an accidental brush from silently beginning a recording.
+// Toggle via Settings → "idle rec" on the device — no reflash required.
 //
-//   STATE_IDLE       (no action by default — see TOUCH_IDLE_STARTS_RECORDING)
+//   STATE_IDLE       (no action by default — see Settings → idle rec)
 //   STATE_MENU       tiles/rows    → select item
 //   STATE_SETTINGS   rows          → select item
 //   STATE_TAG_SELECT pills         → select tag
@@ -403,16 +403,15 @@ static bool handleTouch() {
 
   resetActivity();
 
-  // STATE_IDLE: guarded by compile-time flag.  Default = no-op so that an
+  // STATE_IDLE: guarded by runtime NVS setting.  Default = no-op so that an
   // accidental brush of the screen cannot silently start a recording.
-  // To re-enable, set TOUCH_IDLE_STARTS_RECORDING 1 in config.h.
+  // Toggle via Settings → "idle rec" on the device.
   if (state == STATE_IDLE) {
-#if TOUCH_IDLE_STARTS_RECORDING
-    startRecordFlow();
-    return true;
-#else
+    if (cfg::idleTouchRecord()) {
+      startRecordFlow();
+      return true;
+    }
     return false;
-#endif
   }
 
   // ── MENU ───────────────────────────────────────────────────────────────
@@ -454,9 +453,10 @@ static bool handleTouch() {
   }
 
   // ── SETTINGS ──────────────────────────────────────────────────────────
-  // Rows at y=38,70,102,134,166, h=28, x=16, w=168
+  // Rows at y=38,70,102,134,166,198, h=28, x=16, w=168
+  // i=0 Sounds  i=1 Transfer  i=2 Device  i=3 Erase All  i=4 idle rec  i=5 Reset
   if (state == STATE_SETTINGS) {
-    const int rowY[5] = { 38, 70, 102, 134, 166 };
+    const int rowY[6] = { 38, 70, 102, 134, 166, 198 };
     for (int i = 0; i < SETTINGS_COUNT; i++) {
       if (touchHitTest(tx, ty, 16, rowY[i], 168, 28)) {
         soundSelect();
@@ -473,6 +473,9 @@ static bool handleTouch() {
           eraseAllCursor = 0;
           state = STATE_DELETE_ALL_CONFIRM;
           showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
+        } else if (i == 4) {
+          cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
+          showSettings(settingsCursor);
         } else {
           state = STATE_RESET_CONFIRM;
           showResetConfirm();
@@ -551,7 +554,7 @@ static bool handleTouch() {
       const int pageSize = 3;
       int pageStart = (listCursor / pageSize) * pageSize;
       const int y0 = 43, step = 47;
-      for (int row = 0; row < pageSize; row++) {
+      for (int row = 0; row < pageSize; row++) ++) {
         int vis = pageStart + row;
         if (vis >= count) break;
         if (touchHitTest(tx, ty, 16, y0 + row * step, 168, 39)) {
