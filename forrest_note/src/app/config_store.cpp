@@ -155,6 +155,11 @@ bool setGithubDir(const String& dir) {
 void setGithubEnabled(bool on)  { prefs.putBool("ghon", on); }
 void setGithubAiEnrich(bool on) { prefs.putBool("ghai", on); }
 
+// ── Touch behaviour ──────────────────────────────────────────────────────────
+
+bool idleTouchRecord()         { return prefs.getBool("idlerec", false); }
+void setIdleTouchRecord(bool on) { prefs.putBool("idlerec", on); }
+
 void factoryReset() { prefs.clear(); }
 
 }  // namespace cfg

@@ -55,6 +55,12 @@ bool    setGithubDir(const String& dir);
 void    setGithubEnabled(bool on);
 void    setGithubAiEnrich(bool on);
 
+// ── Touch behaviour ──────────────────────────────────────────────────────────
+// idleTouchRecord(): when true, tapping the idle screen starts a recording.
+// Default false — prevents accidental pocket recordings.
+bool    idleTouchRecord();
+void    setIdleTouchRecord(bool on);
+
 void    factoryReset();
 
 }  // namespace cfg
