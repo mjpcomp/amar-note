@@ -7,7 +7,6 @@
 #include <vector>
 #include "driver/i2c_master.h"
 #include "esp_heap_caps.h"
-#include "USB.h"
 
 extern "C" {
 #include "config.h"
@@ -237,9 +236,12 @@ void startTransferMode() {
 
 // ─── Setup ─────────────────────────────────────────────────────────────────────────────────────────
 void setup() {
+  // Power latch must come first — required before usb_msc_check_boot_flag()
+  // so the device stays on during the MSC session if rebooting into MSC mode.
+  keepBatteryPowerOn();
+
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== Amar Note " FIRMWARE_VERSION " ===");
 
   cfg::begin();
 
@@ -247,21 +249,11 @@ void setup() {
   pinMode(BTN_PWR, INPUT_PULLUP);
 
   board.VBAT_POWER_ON();
-
-  wokeFromUltraSleep  = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1);
-  delay(50);
-
-  wakeToMenuRequested = (wokeFromUltraSleep && digitalRead(BTN_PWR) == LOW);
-  wakeToRecRequested  = (wokeFromUltraSleep && digitalRead(BTN_REC) == LOW);
-
-  resetActivity();
-  keepBatteryPowerOn();
-  delay(20);
-
   board.POWEER_EPD_ON();
   board.POWEER_Audio_ON();
   delay(200);
 
+  // Init display (needed for showUsbMsc() in MSC boot path).
   custom_lcd_spi_t dispCfg = {};
   dispCfg.cs       = EPD_CS_PIN;
   dispCfg.dc       = EPD_DC_PIN;
@@ -278,6 +270,22 @@ void setup() {
   display->EPD_DisplayPartBaseImage();
   display->EPD_Init_Partial();
 
+  // Check RTC flag — if set, run MSC session and never return.
+  // Must be after display init (for showUsbMsc) and power latch,
+  // but before any other peripheral init (WiFi, audio, SD filesystem).
+  usb_msc_check_boot_flag();
+
+  // ─── Normal boot path below ───
+  Serial.println("\n=== Amar Note " FIRMWARE_VERSION " ===");
+
+  wokeFromUltraSleep  = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1);
+  delay(50);
+
+  wakeToMenuRequested = (wokeFromUltraSleep && digitalRead(BTN_PWR) == LOW);
+  wakeToRecRequested  = (wokeFromUltraSleep && digitalRead(BTN_REC) == LOW);
+
+  resetActivity();
+
   i2c_master_Init();
   delay(50);
 
@@ -293,12 +301,6 @@ void setup() {
   loadTags();
   loadIndex();
   Serial.printf("[SD] %d notes\n", (int)noteIndex.size());
-
-  // Register USB MSC (with mediaPresent=false) then start USB stack.
-  // All USB classes must be registered before USB.begin() is called.
-  // CDCOnBoot provides Serial; MSC registers here for on-demand use.
-  usb_msc_init();
-  USB.begin();
 
   if (wakeToMenuRequested) {
     menuCursor = 0;
@@ -496,12 +498,8 @@ void loop() {
         showSettings(settingsCursor);
       } else {
         // menuCursor == 4: USB Drive
-        state = STATE_USB_MSC;
+        // Sets RTC flag and calls ESP.restart() — does not return.
         enterMscMode();
-        // enterMscMode() blocks until hold-REC; on return, SD is re-mounted.
-        loadIndex();
-        state = STATE_MENU;
-        showMenu(menuCursor);
       }
     } else if (rec == EV_LONG) {
       soundBack();
