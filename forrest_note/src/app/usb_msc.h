@@ -1,6 +1,9 @@
 #pragma once
 
-// enterMscMode() — full-screen USB mass storage takeover.
-// Unmounts SD_MMC, presents it as a USB drive, shows the MSC screen,
-// and blocks until the user holds BTN_REC. Re-mounts SD_MMC on exit.
+// Call once from setup(), before USB.begin(), to register the MSC class.
+// mediaPresent is initially false so the host sees no media at boot.
+void usb_msc_init();
+
+// Block until hold-REC: unmounts SD, connects MSC to host, then on exit
+// disconnects MSC and re-mounts SD. Caller must call loadIndex() after.
 void enterMscMode();
