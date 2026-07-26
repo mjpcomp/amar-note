@@ -7,12 +7,17 @@
 #include "ui.h"
 #include "usb_msc.h"
 
-static USBMSC msc;
-static uint32_t sMscSectorCount = 0;
+// ---------------------------------------------------------------------------
+// RTC_NOINIT survives ESP.restart() and deep-sleep wakeup.
+// Cleared only on power-on reset (battery pull / first power-up).
+// Magic value guards against uninitialized RAM looking like a valid flag.
+// ---------------------------------------------------------------------------
+#define MSC_BOOT_MAGIC  0xA5C3E1B2u
+
+RTC_NOINIT_ATTR uint32_t sMscBootMagic;
 
 // ---------------------------------------------------------------------------
-// MSC callbacks — called by TinyUSB on the USB task.
-// SD_MMC is unmounted before mediaPresent(true) is set.
+// MSC callbacks — SD_MMC is re-init'd in raw mode before these are called.
 // ---------------------------------------------------------------------------
 static int32_t mscRead(uint32_t lba, uint32_t offset, void* buf, uint32_t bufSize) {
   uint32_t sector = lba + (offset / 512);
@@ -27,66 +32,75 @@ static int32_t mscWrite(uint32_t lba, uint32_t offset, uint8_t* buf, uint32_t bu
 }
 
 // ---------------------------------------------------------------------------
-// usb_msc_init — call once from setup(), before USB.begin().
-// Registers the MSC class. mediaPresent starts false so the host sees
-// no media until the user explicitly enters USB Drive mode.
+// usb_msc_check_boot_flag
+// Call at the very top of setup(), before any other peripheral init.
+// If the magic is set, we were rebooted into MSC mode:
+//   1. Init SD in raw mode (no filesystem mount needed).
+//   2. Register MSC + start USB as a pure mass-storage device.
+//   3. Show the USB screen and block until hold-REC.
+//   4. Clear the flag and reboot back to normal.
+// This function never returns when the flag is set.
 // ---------------------------------------------------------------------------
-void usb_msc_init() {
-  // Query card geometry while SD is still mounted.
-  sMscSectorCount = (uint32_t)(SD_MMC.cardSize() / 512ULL);
+void usb_msc_check_boot_flag() {
+  if (sMscBootMagic != MSC_BOOT_MAGIC) return;
 
+  // Flag is set — run MSC-only session.
+  // We must NOT call keepBatteryPowerOn() here; the caller (setup) must
+  // handle the power latch BEFORE calling this function so we stay on.
+
+  // Init SD in 1-bit mode; we only need raw sector access.
+  SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
+  SD_MMC.begin("/sdcard", true);
+  uint32_t sectorCount = (uint32_t)(SD_MMC.cardSize() / 512ULL);
+  SD_MMC.end();  // unmount FS — give host exclusive block access
+  delay(50);
+
+  // Register MSC and start USB as mass-storage only (no CDC).
+  static USBMSC msc;
   msc.vendorID("Amar");
   msc.productID("Note SD Card");
   msc.productRevision("1.0");
   msc.onRead(mscRead);
   msc.onWrite(mscWrite);
-  msc.mediaPresent(false);   // not connected until user requests it
-  msc.begin(sMscSectorCount, 512);
-  // USB.begin() is called by the caller (setup()) after this returns.
-}
-
-// ---------------------------------------------------------------------------
-// enterMscMode — called when user selects USB Drive from the menu.
-// Blocks until hold-REC; on return SD is re-mounted.
-// ---------------------------------------------------------------------------
-void enterMscMode() {
-  // Unmount filesystem so the host gets exclusive block-level access.
-  SD_MMC.end();
-  delay(50);
-
-  // Connect MSC to the host.
   msc.mediaPresent(true);
+  msc.begin(sectorCount, 512);
+  USB.begin();
 
-  // Show the full-screen MSC UI.
+  // Show MSC screen (minimal init — display must be set up by caller first).
   showUsbMsc();
 
   // Block until hold-REC.
   bool     btnWasDown = false;
   uint32_t btnDownAt  = 0;
-  bool     done       = false;
 
-  while (!done) {
+  while (true) {
     delay(20);
     bool btnDown = (digitalRead(BTN_REC) == LOW);
     if (btnDown && !btnWasDown) {
       btnDownAt  = millis();
       btnWasDown = true;
     } else if (btnWasDown) {
-      uint32_t held = millis() - btnDownAt;
       if (!btnDown) {
-        btnWasDown = false;  // released before threshold — ignore
-      } else if (held >= (uint32_t)BTN_LONG_MS) {
-        done = true;         // long-held — exit MSC mode
+        btnWasDown = false;
+      } else if ((millis() - btnDownAt) >= (uint32_t)BTN_LONG_MS) {
+        break;
       }
     }
   }
 
-  // Disconnect MSC from host.
-  msc.mediaPresent(false);
-  delay(200);  // give host a moment to notice media gone
+  // Clear flag and reboot into normal mode.
+  sMscBootMagic = 0;
+  delay(200);  // let host see media-gone before reboot
+  ESP.restart();
+  // never returns
+}
 
-  // Re-mount SD filesystem.
-  SD_MMC.begin("/sdcard", true);
+// ---------------------------------------------------------------------------
+// enterMscMode — called from the menu.
+// Sets the RTC flag and reboots; does not return.
+// ---------------------------------------------------------------------------
+void enterMscMode() {
+  sMscBootMagic = MSC_BOOT_MAGIC;
   delay(50);
-  // Caller is responsible for calling loadIndex() after this returns.
+  ESP.restart();
 }
