@@ -26,10 +26,6 @@ static int32_t mscWrite(uint32_t lba, uint32_t offset, uint8_t* buf, uint32_t bu
   return -1;
 }
 
-static void mscFlush() {
-  // SD_MMC has no explicit flush; writes are synchronous.
-}
-
 // ---------------------------------------------------------------------------
 // enterMscMode — public entry point.
 // ---------------------------------------------------------------------------
@@ -38,21 +34,20 @@ void enterMscMode() {
   SD_MMC.end();
   delay(50);
 
-  // Determine card geometry.
-  // We must briefly re-init in raw mode to read cardSize, then end again.
-  // Alternatively use a cached value if available — here we re-init once.
+  // Briefly re-init in raw mode to query card geometry, then end again.
   SD_MMC.begin("/sdcard", true);  // 1-bit mode is fine for geometry query
   uint32_t sectorCount = (uint32_t)(SD_MMC.cardSize() / 512ULL);
   SD_MMC.end();
   delay(20);
 
   // Register MSC device with TinyUSB.
+  // Note: onFlush() is not part of the USBMSC API in ESP32 Arduino core 3.x.
+  // SD_MMC.writeRAW() is synchronous so no explicit flush is needed.
   msc.vendorID("Amar");
   msc.productID("Note SD Card");
   msc.productRevision("1.0");
   msc.onRead(mscRead);
   msc.onWrite(mscWrite);
-  msc.onFlush(mscFlush);
   msc.mediaPresent(true);
   msc.begin(sectorCount, 512);
 
