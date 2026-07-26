@@ -9,6 +9,7 @@
 #include "rtc.h"
 #include "../../logo_bitmap.h"
 #include "../../sounds.h"
+#include "config_store.h"
 #include "SD_MMC.h"
 
 #define W   200
@@ -698,28 +699,42 @@ void showTransferMode(const char* ip) {
   refresh();
 }
 
+// ─── Settings screen ──────────────────────────────────────────────────────────
+//
+// Row layout (y0=38, step=26, boxH=22) fits 6 rows cleanly in 200px:
+//   Row 0  y=38   Sounds      (on/off)
+//   Row 1  y=64   Transfer
+//   Row 2  y=90   Device
+//   Row 3  y=116  Erase All
+//   Row 4  y=142  Reset
+//   Row 5  y=168  idle rec    (on/off)
+//
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
   hline(16, 32, W-32, BLACK);
-  const int y0 = 38, step = 32, boxH = 28;
+  const int y0 = 38, step = 26, boxH = 22;
   for (int row = 0; row < SETTINGS_COUNT; row++) {
     bool active = row == cursor;
     int y = y0 + row * step;
-    if (active) fillRoundRect(16, y, 168, boxH, 8, BLACK);
-    else        strokeRoundRect(16, y, 168, boxH, 8, 1, BLACK);
+    if (active) fillRoundRect(16, y, 168, boxH, 6, BLACK);
+    else        strokeRoundRect(16, y, 168, boxH, 6, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
     if (row == 0) {
-      drawStr(28, y + 8, "sounds", 1, col);
-      drawStr(W - 70, y + 8, amarSoundIsEnabled() ? "on" : "off", 1, col);
+      drawStr(28, y + 6, "sounds", 1, col);
+      drawStr(W - 70, y + 6, amarSoundIsEnabled() ? "on" : "off", 1, col);
     } else if (row == 1) {
-      drawStr(28, y + 8, "transfer", 1, col);
+      drawStr(28, y + 6, "transfer", 1, col);
     } else if (row == 2) {
-      drawStr(28, y + 8, "device", 1, col);
+      drawStr(28, y + 6, "device", 1, col);
     } else if (row == 3) {
-      drawStr(28, y + 8, "erase all", 1, col);
+      drawStr(28, y + 6, "erase all", 1, col);
+    } else if (row == 4) {
+      drawStr(28, y + 6, "reset", 1, col);
     } else {
-      drawStr(28, y + 8, "reset", 1, col);
+      // row == 5: idle touch → record
+      drawStr(28, y + 6, "idle rec", 1, col);
+      drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
     }
   }
   refresh();
