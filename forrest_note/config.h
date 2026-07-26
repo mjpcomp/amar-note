@@ -96,17 +96,14 @@
 #define DEVICE_TZ_POSIX  "PST8PDT,M3.2.0,M11.1.0"   // US Pacific (UTC-8 / UTC-7 DST)
 
 // ---------------------------------------------------------------------------
-// Touch behaviour — idle screen
+// Settings menu row count
 // ---------------------------------------------------------------------------
-// By default, tapping the idle screen does NOT start a recording.
-// This prevents an accidental brush of the touch panel from silently
-// beginning a recording while the device is in a pocket or bag.
+// Bump this when adding or removing rows from SETTINGS_ITEMS[] in the .ino
+// and the corresponding showSettings() / handleTouch() logic in ui.cpp.
 //
-// To restore the original "tap idle screen → record" behaviour, set this to 1
-// and reflash.  Recording always stops with the physical REC button regardless
-// of this setting.
+// Current rows: Sounds | Transfer | Device | Erase All | Reset | idle rec
 //
-#define TOUCH_IDLE_STARTS_RECORDING  0
+#define SETTINGS_COUNT  6
 
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
 #define FIRMWARE_VERSION  "v1.0"
