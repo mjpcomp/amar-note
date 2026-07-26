@@ -98,6 +98,22 @@ void iconNoteLines(int cx, int cy) {
   fillRect(cx-32, cy+16, 44, 6, BLACK);
 }
 
+// USB drive icon: rectangular body + connector tab on the left.
+void iconUsbDrive(int cx, int cy) {
+  // Body: wide rectangle
+  strokeRoundRect(cx-32, cy-18, 56, 36, 5, 3, BLACK);
+  // Connector tab on the right
+  fillRect(cx+24, cy-8, 16, 16, BLACK);
+  // Tiny windows cut out of tab to suggest USB plug shape
+  fillRect(cx+27, cy-5, 4, 5, WHITE);
+  fillRect(cx+27, cy+2, 4, 5, WHITE);
+  // Small LED dot on body
+  fillCircle(cx-12, cy, 4, BLACK);
+  // Label lines on body
+  hline(cx-24, cy-6, 30, BLACK);
+  hline(cx-24, cy+2, 22, BLACK);
+}
+
 // ─── Layout helpers ────────────────────────────────────────────────────────────────────────────
 void drawHeader(const char* title, const char* rightInfo) {
   fillRect(0, 0, W, 28, BLACK);
@@ -677,6 +693,19 @@ void showDeleteAllDone(bool alsoVault) {
   forceFullRefresh();
 }
 
+void showUsbMsc() {
+  clearWhite();
+  drawHeader("USB Storage", nullptr);
+  iconUsbDrive(100, 82);
+  drawStrC(100, 126, "Connected", 1, BLACK);
+  drawStrC(100, 146, "safely eject before", 1, BLACK);
+  drawStrC(100, 162, "exiting", 1, BLACK);
+  hline(0, 179, W, BLACK);
+  fillRect(0, 180, W, 20, WHITE);
+  drawStr(8, 186, "hold rec to exit", 1, BLACK);
+  refresh();
+}
+
 void redrawCurrentScreen() {
   switch (state) {
     case STATE_MENU:        showMenu(menuCursor);         break;
@@ -685,6 +714,7 @@ void redrawCurrentScreen() {
     case STATE_TAG_BROWSER: showTagBrowser(tagCursor);    break;
     case STATE_TAG_SELECT:  showTagSelect(tagCursor);     break;
     case STATE_NOTE_DETAIL: showNoteDetail(listCursor);   break;
+    case STATE_USB_MSC:     showUsbMsc();                 break;
     default: break;
   }
 }

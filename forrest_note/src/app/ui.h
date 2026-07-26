@@ -59,6 +59,7 @@ void showResetDone();
 void showDeleteAllConfirm(int count, int cursor);
 void showDeleteAllDone(bool alsoVault);
 void showObsidianSync(int done, int total);
+void showUsbMsc();   // full-screen USB storage takeover
 
 void redrawCurrentScreen();   // repaint the current state's screen
 void serviceDisplay();        // run each loop: paints pending redraws when panel is free
