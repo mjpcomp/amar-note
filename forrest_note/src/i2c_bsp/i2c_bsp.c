@@ -4,8 +4,8 @@
 #include "../../config.h"
 
 static i2c_master_bus_handle_t user_i2c_handle = NULL;
-i2c_master_dev_handle_t rtc_dev_handle = NULL;
-i2c_master_dev_handle_t shtc3_handle = NULL;
+i2c_master_dev_handle_t rtc_dev_handle  = NULL;
+i2c_master_dev_handle_t shtc3_handle    = NULL;
 
 static uint32_t i2c_data_pdMS_TICKS = 0;
 static uint32_t i2c_done_pdMS_TICKS = 0;
@@ -31,6 +31,13 @@ void i2c_master_Init(void)
 
   		dev_cfg.device_address = I2C_SHTC3_DEV_Address;
   	ESP_ERROR_CHECK(i2c_master_bus_add_device(user_i2c_handle, &dev_cfg, &shtc3_handle));
+}
+
+// Allow other modules to register additional I2C devices on the shared bus
+// without exposing the raw bus handle globally.
+void i2c_touch_register_device(i2c_device_config_t *dev_cfg, i2c_master_dev_handle_t *out_handle)
+{
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(user_i2c_handle, dev_cfg, out_handle));
 }
 
 int i2c_write_buff(i2c_master_dev_handle_t dev_handle,int reg,uint8_t *buf,uint8_t len)
