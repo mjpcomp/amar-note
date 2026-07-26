@@ -98,18 +98,12 @@ void iconNoteLines(int cx, int cy) {
   fillRect(cx-32, cy+16, 44, 6, BLACK);
 }
 
-// USB drive icon: rectangular body + connector tab on the left.
 void iconUsbDrive(int cx, int cy) {
-  // Body: wide rectangle
   strokeRoundRect(cx-32, cy-18, 56, 36, 5, 3, BLACK);
-  // Connector tab on the right
   fillRect(cx+24, cy-8, 16, 16, BLACK);
-  // Tiny windows cut out of tab to suggest USB plug shape
   fillRect(cx+27, cy-5, 4, 5, WHITE);
   fillRect(cx+27, cy+2, 4, 5, WHITE);
-  // Small LED dot on body
   fillCircle(cx-12, cy, 4, BLACK);
-  // Label lines on body
   hline(cx-24, cy-6, 30, BLACK);
   hline(cx-24, cy+2, 22, BLACK);
 }
@@ -271,8 +265,6 @@ static void drawBolt(int x, int y) {
   fillTriangle(x+5, y+8,  x+10, y+8, x+3, y+18, BLACK);
 }
 
-// Small inline battery icon: body (bw x bh) + terminal nub on right.
-// x, y = top-left of the body rectangle. Total width = bw + 2.
 static void drawBatteryIcon(int x, int y, int bw, int bh, int pct, uint8_t color) {
   strokeRect(x, y, bw, bh, 1, color);
   int nubH = max(2, bh / 3);
@@ -377,19 +369,64 @@ void showTagSelect(int cursor) {
   refresh();
 }
 
+// ─── Menu layout ──────────────────────────────────────────────────────────────────────────────
+//
+// Screen is 200 x 200 px.  Header uses y=0..27 (28px).  We have 172px below.
+//
+// Row A  — Notes (left tile) + Tags (right tile)
+//          y=30, h=44, gap=4 between tiles
+//          Left  tile: x=10, w=88
+//          Right tile: x=102, w=88
+//
+// Row B/C/D — Sync / Settings / USB Drive  (full-width cards)
+//          x=10, w=180, h=28, spacing: y=80, 113, 146
+//          Total bottom edge: 146+28 = 174px  (safe)
+
 void showMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "menu", 1, BLACK);
-  hline(16, 32, W-32, BLACK);
-  const int y0 = 42, step = 36;
-  for (int row = 0; row < MENU_COUNT; row++) {
-    bool active = row == cursor;
-    int y = y0 + row * step;
-    if (active) fillRoundRect(16, y, 168, 31, 8, BLACK);
-    else        strokeRoundRect(16, y, 168, 31, 8, 1, BLACK);
+  hline(16, 26, W-32, BLACK);
+
+  // ── Row A: Notes (0) + Tags (1) side by side ──
+  const int tileY = 30, tileH = 44;
+  const int tileL_x = 10,  tileL_w = 88;   // left  tile
+  const int tileR_x = 102, tileR_w = 88;   // right tile
+
+  // Notes tile
+  {
+    bool active = (cursor == 0);
+    if (active) fillRoundRect(tileL_x, tileY, tileL_w, tileH, 10, BLACK);
+    else        strokeRoundRect(tileL_x, tileY, tileL_w, tileH, 10, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
-    drawStrInBox(16, y, 168, 31, MENU_ITEMS[row], 1, col);
+    drawMinimalDocIcon(tileL_x + tileL_w/2, tileY + 16, col);
+    drawStrInBox(tileL_x + 2, tileY + tileH - 16, tileL_w - 4, 14, "Notes", 1, col);
   }
+
+  // Tags tile
+  {
+    bool active = (cursor == 1);
+    if (active) fillRoundRect(tileR_x, tileY, tileR_w, tileH, 10, BLACK);
+    else        strokeRoundRect(tileR_x, tileY, tileR_w, tileH, 10, 1, BLACK);
+    uint8_t col = active ? WHITE : BLACK;
+    drawMinimalTagIcon(tileR_x + tileR_w/2, tileY + 16, col);
+    drawStrInBox(tileR_x + 2, tileY + tileH - 16, tileR_w - 4, 14, "Tags", 1, col);
+  }
+
+  // ── Rows B/C/D: Sync (2), Settings (3), USB Drive (4) ──
+  const int rowX = 10, rowW = 180, rowH = 28;
+  const int rowY[3] = { 80, 113, 146 };
+  const char* rowLabels[3] = { "Sync", "Settings", "USB Drive" };
+
+  for (int i = 0; i < 3; i++) {
+    int menuIdx = 2 + i;
+    bool active = (cursor == menuIdx);
+    int y = rowY[i];
+    if (active) fillRoundRect(rowX, y, rowW, rowH, 8, BLACK);
+    else        strokeRoundRect(rowX, y, rowW, rowH, 8, 1, BLACK);
+    uint8_t col = active ? WHITE : BLACK;
+    drawStrInBox(rowX, y, rowW, rowH, rowLabels[i], 1, col);
+  }
+
   refresh();
 }
 
