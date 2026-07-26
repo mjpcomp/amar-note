@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
+#include <string.h>
 
 extern "C" {
 #include "../../src/audio/audio_bsp.h"
@@ -25,21 +26,20 @@ volatile bool g_stopRecording = false;
 // DMA at line rate so a slow SD write only grows the ring instead of dropping samples.
 struct RecCtx {
   RingbufHandle_t   ring;
-  volatile bool     running;    // consumer -> producer: keep capturing
-  volatile bool     finished;   // producer -> consumer: capture loop exited
+  volatile bool     running;
+  volatile bool     finished;
 };
 
 static void recProducerTask(void* arg) {
   RecCtx* ctx = (RecCtx*)arg;
   int16_t* sbuf = (int16_t*)heap_caps_malloc(REC_BUF,   MALLOC_CAP_8BIT);
   int16_t* mbuf = (int16_t*)heap_caps_malloc(REC_BUF/2, MALLOC_CAP_8BIT);
-  const int monoSamples = REC_BUF / 4;   // stereo int16 in -> mono int16 out
+  const int monoSamples = REC_BUF / 4;
 
   if (sbuf && mbuf) {
     while (ctx->running) {
-      audio_playback_read((void*)sbuf, REC_BUF);   // blocking read from codec DMA
-      for (int i = 0; i < monoSamples; i++) mbuf[i] = sbuf[i * 2];  // left channel
-      // Block briefly if the ring is full (SD catching up); never silently drop.
+      audio_playback_read((void*)sbuf, REC_BUF);
+      for (int i = 0; i < monoSamples; i++) mbuf[i] = sbuf[i * 2];
       xRingbufferSend(ctx->ring, mbuf, monoSamples * 2, pdMS_TO_TICKS(1000));
     }
   }
@@ -74,13 +74,8 @@ bool record() {
   }
 
   uint32_t totalMono = 0, t0 = millis();
-  int      recPeak = 0;   // peak |sample| since the last UI update
-
-  // Minimum recording time (ms) before a button press can stop recording.
-  // Prevents the same tap that started recording from immediately stopping it.
+  int      recPeak = 0;
   const uint32_t MIN_REC_MS = 1000;
-
-  // Button debounce state for in-loop polling.
   bool     btnWasDown  = false;
   uint32_t btnDownAt   = 0;
 
@@ -101,15 +96,12 @@ bool record() {
   while (!g_stopRecording && (millis() - t0 < MAX_REC_MS)) {
     drain(pdMS_TO_TICKS(40));
 
-    // Poll BTN_REC directly — the main loop() is blocked here so readButtonEvent()
-    // is never called.  A clean tap (press + release) after MIN_REC_MS stops recording.
     uint32_t now = millis();
     bool btnDown = (digitalRead(BTN_REC) == LOW);
     if (btnDown && !btnWasDown) {
       btnDownAt  = now;
       btnWasDown = true;
     } else if (!btnDown && btnWasDown) {
-      // Released — treat as a tap if held < long threshold and past the min-rec window.
       uint32_t held = now - btnDownAt;
       if (held < BTN_LONG_MS && (now - t0) >= MIN_REC_MS) {
         g_stopRecording = true;
@@ -128,7 +120,7 @@ bool record() {
 
   ctx.running = false;
   while (!ctx.finished) drain(pdMS_TO_TICKS(50));
-  while (drain(0)) { /* final drain */ }
+  while (drain(0)) {}
 
   vRingbufferDeleteWithCaps(ctx.ring);
 
@@ -149,12 +141,31 @@ bool record() {
   return totalMono > 1000;
 }
 
+// Walk RIFF sub-chunks to find the real PCM data offset.
+// Falls back to 44 if the file doesn't look like a valid RIFF WAV.
+static uint32_t wavDataOffset(File& f) {
+  uint8_t id[4]; uint32_t sz;
+  f.seek(0);
+  if (f.read(id, 4) != 4 || memcmp(id, "RIFF", 4) != 0) return 44;
+  f.read((uint8_t*)&sz, 4);
+  if (f.read(id, 4) != 4 || memcmp(id, "WAVE", 4) != 0) return 44;
+  while (f.available() >= 8) {
+    if (f.read(id, 4) != 4) break;
+    if (f.read((uint8_t*)&sz, 4) != 4) break;
+    if (memcmp(id, "data", 4) == 0) return (uint32_t)f.position();
+    uint32_t skip = (sz + 1) & ~1u;
+    if (!f.seek(f.position() + skip)) break;
+  }
+  return 44;
+}
+
 bool playWavFile(const char* path) {
   File f = SD_MMC.open(path);
   if (!f) return false;
   if (f.size() <= 44) { f.close(); return false; }
 
-  f.seek(44);
+  uint32_t dataOffset = wavDataOffset(f);
+  f.seek(dataOffset);
 
   const int monoBytes = 1024;
   uint8_t* monoBuf   = (uint8_t*)heap_caps_malloc(monoBytes,     MALLOC_CAP_8BIT);
@@ -167,10 +178,16 @@ bool playWavFile(const char* path) {
     return false;
   }
 
-  audioPlaying  = true;
-  stopPlayback  = false;
+  audioPlaying = true;
+  stopPlayback = false;
 
   amarSoundSetEnabled(false);
+
+  // Re-open the codec path after recording. The I2S DMA clock can be in a
+  // degraded state after record() exits. audio_play_init() re-opens both
+  // handles (idempotent) and restores sample-rate/channel config.
+  audio_play_init();
+  delay(20);
   audio_playback_set_vol(85);
 
   while (f.available() && !stopPlayback) {
@@ -197,7 +214,11 @@ bool playWavFile(const char* path) {
   }
 
   audio_playback_set_vol(0);
+
+  // amarSoundSetEnabled(true) only flips the flag, does NOT restore the volume
+  // register. Explicitly set vol so UI sounds work immediately after playback.
   amarSoundSetEnabled(true);
+  if (amarSoundIsEnabled()) audio_playback_set_vol(75);
 
   heap_caps_free(monoBuf);
   heap_caps_free(stereoBuf);
