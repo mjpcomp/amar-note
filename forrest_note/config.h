@@ -95,6 +95,19 @@
 // ---------------------------------------------------------------------------
 #define DEVICE_TZ_POSIX  "PST8PDT,M3.2.0,M11.1.0"   // US Pacific (UTC-8 / UTC-7 DST)
 
+// ---------------------------------------------------------------------------
+// Touch behaviour — idle screen
+// ---------------------------------------------------------------------------
+// By default, tapping the idle screen does NOT start a recording.
+// This prevents an accidental brush of the touch panel from silently
+// beginning a recording while the device is in a pocket or bag.
+//
+// To restore the original "tap idle screen → record" behaviour, set this to 1
+// and reflash.  Recording always stops with the physical REC button regardless
+// of this setting.
+//
+#define TOUCH_IDLE_STARTS_RECORDING  0
+
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
 #define FIRMWARE_VERSION  "v1.0"
 #define FW_VERSION        FIRMWARE_VERSION

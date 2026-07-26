@@ -203,7 +203,7 @@ On the touch variant the FT6336 capacitive controller adds direct tap navigation
 
 | Touch gesture | Action |
 |---|---|
-| **Tap anywhere (idle screen)** | Start recording |
+| ~~**Tap anywhere (idle screen)**~~ | ~~Start recording~~ — **removed** (see note below) |
 | **Tap a menu tile or row** | Select that item (equivalent to REC) |
 | **Tap a settings row** | Activate that setting |
 | **Tap a tag pill** | Choose that tag after recording |
@@ -214,7 +214,11 @@ On the touch variant the FT6336 capacitive controller adds direct tap navigation
 | **Tap lower area of note detail** | Scroll to next page / advance to next note |
 | **Tap bottom strip (y ≥ 180)** | Go back (equivalent to long-hold REC) |
 
-> **Recording is always button-driven.** Touch can *start* a recording (tap the idle screen), but only the **record button** stops it. This is intentional — it prevents accidental touch-stops mid-sentence and keeps the recording UX consistent across both hardware variants.
+> **Touch on the idle screen is disabled by default** to prevent an accidental brush of the screen from silently starting a recording. Recording is always started with the physical **REC button**; only stopping is touch-accessible after recording begins (which is also button-driven).
+>
+> **To re-enable idle-touch recording:** set `TOUCH_IDLE_STARTS_RECORDING` to `1` in `config.h` and reflash. Note that only the **REC button** can stop a recording — this is intentional on both hardware variants.
+
+> **Recording is always button-driven.** Only the **record button** stops a recording. This keeps recording UX consistent across both hardware variants.
 
 ---
 
@@ -301,35 +305,15 @@ All runtime config lives in NVS (namespace **`amar`**) and is set via the portal
 
 Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default is US Pacific (`PST8PDT,M3.2.0,M11.1.0`). Common alternatives are documented inline in `config.h`.
 
+### Compile-time flags (`config.h`)
+
+| Flag | Default | Description |
+|---|---|---|
+| `TOUCH_IDLE_STARTS_RECORDING` | `0` | Set to `1` to allow a tap on the idle screen to start recording. Disabled by default to prevent accidental recordings from a stray touch. |
+
 ---
 
 ## 🛠️ Troubleshooting
 
 - **Device won't stay on USB for flashing** → hold BOOT button while plugging in and through the write.
-- **Build error about duplicate `.cpp`** → delete any `* 2.cpp` / `* copy.cpp` files.
-- **Boot loop / PSRAM errors** → confirm **PSRAM = OPI** and **Flash Size = 8MB**.
-- **Notes sync but no AI summary** → check **AI titles + topic links** is ticked and your chosen enrichment provider key has access.
-- **Wi-Fi won't connect** → ESP32-S3 is **2.4 GHz only**.
-- **Transcription fails after upgrading from Forrest Note** → NVS namespace changed (`forrest` → `amar`); do a full flash-erase (`esptool.py erase_flash`) before flashing, then re-provision via the portal.
-- **Groq transcription fails** → confirm your Groq key is saved and **STT Provider** is set to **Groq** in the portal. Groq's free tier has per-minute rate limits; if you hit them, switch back to OpenAI.
-- **Groq enrichment fails or returns empty** → check your Groq key and selected model. The `llama-4-scout` model has a lower rate limit (15 RPM); switch to `llama-3.3-70b-versatile` or `llama-3.1-8b-instant` if you hit limits. Alternatively switch enrichment provider to OpenAI.
-- **Note timestamps show wrong timezone** → edit `DEVICE_TZ_POSIX` in `config.h` and reflash. Common zone strings are listed there.
-- **Sounds toggle in Settings has no effect** → you are likely running a build from before the `sounds.cpp` ODR fix. The old `sounds.h` used `static bool amarSoundEnabled`, which gave every `.cpp` its own private copy so writes from one file had no effect on reads in another. Pull the latest code and rebuild — `sounds.cpp` now holds the single definition.
-- **USB Drive mode not available / compile error about `USB.h`** → USB Mass Storage requires **ESP32 Arduino core ≥ 2.0**. Run `arduino-cli core install esp32:esp32@3.2.0` (or later) and rebuild.
-- **USB Drive mode: SD card doesn't appear on host** → ensure you're using a USB-C cable that supports data (not charge-only). The ESP32-S3 acts as a USB OTG device; some hubs don't pass OTG — connect directly to the host port.
-- **Touch not responding (Touch-ePaper variant)** → confirm I2C is up; the FT6336 sits at address `0x38` on the shared I2C bus. A failed I2C init will print `[touch] FT6336 init OK` to serial — if that line is absent, check solder joints on SDA (GPIO47) / SCL (GPIO48). Touch issues never affect the non-touch board.
-
----
-
-## 🔒 Security & privacy
-
-- No secrets in this repo. Keys stored in on-device NVS.
-- Notes go only to your chosen STT provider (OpenAI or Groq) and your own GitHub repo.
-- AI enrichment uses your chosen provider — either **OpenAI `gpt-4o-mini`** or a **Groq Llama model**. Audio never leaves the device; only the text transcript is sent to the enrichment provider.
-
----
-
-## 📄 License
-
-Amar Note's additions are released under the **MIT License**.
-Built on **Forrest Note** (MIT) and the original **Pala Note** project — please honour the original author's license terms for their portions of the code.
+- **Build error about duplicate `.cpp`** → delete any `* 2.cpp` /
