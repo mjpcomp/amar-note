@@ -554,7 +554,7 @@ static bool handleTouch() {
       const int pageSize = 3;
       int pageStart = (listCursor / pageSize) * pageSize;
       const int y0 = 43, step = 47;
-      for (int row = 0; row < pageSize; row++) ++) {
+      for (int row = 0; row < pageSize; row++) {
         int vis = pageStart + row;
         if (vis >= count) break;
         if (touchHitTest(tx, ty, 16, y0 + row * step, 168, 39)) {
