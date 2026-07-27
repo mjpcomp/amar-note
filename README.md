@@ -81,9 +81,24 @@ Amar Note supports **two Waveshare ESP32-S3 1.54″ e-Paper boards** — pick wh
 
 Both boards are the **B/W** (black-and-white, non-"G") 200×200 e-paper variant.
 
-### Common hardware specs
+### Hardware version — V2 boards required
 
-- **MCU:** ESP32-S3 (Xtensa LX7 dual-core @ 240 MHz) — **N8R8**: 8 MB flash + 8 MB OPI PSRAM
+> ⚠️ **This firmware requires the V2 (current) board revision.**
+
+Waveshare has shipped two MCU revisions of the ESP32-S3-ePaper-1.54 / Touch-ePaper-1.54 boards:
+
+| Revision | MCU module | Flash | PSRAM | Status |
+|---|---|---|---|---|
+| **V1** | ESP32-S3FH4R2 | 4 MB | 2 MB | ❌ Not supported |
+| **V2** (current) | **ESP32-S3-PICO-1-N8R8** | **8 MB** | **8 MB OPI** | ✅ Supported |
+
+Amar Note is compiled and tuned for the **N8R8** variant (8 MB flash + 8 MB OPI PSRAM). The build flags, PSRAM configuration (`PSRAM=opi`), custom partition table, and ring-buffer recording engine all depend on this. The V1 board's 2 MB PSRAM is insufficient for the PSRAM-backed ring buffer and cannot be supported without significant re-engineering.
+
+If you're purchasing new hardware, both current Waveshare product pages ship V2 boards. If you have an older unit, check the MCU module label on the back of the board: the V2 module is marked **ESP32-S3-PICO-1**.
+
+### Common hardware specs (V2)
+
+- **MCU:** ESP32-S3-PICO-1-N8R8 (Xtensa LX7 dual-core @ 240 MHz) — **8 MB flash + 8 MB OPI PSRAM**
 - **Display:** 1.54″ **200×200** e-paper (black/white)
 - **Audio:** ES8311 codec + ES7210 ADC mic + speaker
 - **Storage:** microSD (SD_MMC 1-bit)
@@ -99,7 +114,7 @@ The printable enclosure is the original creator's hardware design — download f
 
 ## 📋 What you'll need
 
-1. Assembled Waveshare ESP32-S3-ePaper-1.54 **or** ESP32-S3-Touch-ePaper-1.54 board + USB-C cable.
+1. Assembled Waveshare ESP32-S3-ePaper-1.54 **or** ESP32-S3-Touch-ePaper-1.54 board (**V2 / N8R8**) + USB-C cable.
 2. *(For AI enrichment with OpenAI)* An **OpenAI API key** — <https://platform.openai.com/api-keys>.
 3. *(Optional, free alternative for both STT and enrichment)* A **Groq API key** — <https://console.groq.com/keys>.
 4. A **GitHub repo** for notes + a fine-grained PAT with **Contents: Read and write** — <https://github.com/settings/tokens>.
@@ -216,7 +231,7 @@ On the touch variant the FT6336 capacitive controller adds direct tap navigation
 
 > **Touch on the idle screen is disabled by default** to prevent an accidental brush of the screen from silently starting a recording. Recording is always started with the physical **REC button**; only stopping is touch-accessible after recording begins (which is also button-driven).
 >
-> **To re-enable idle-touch recording:** set `TOUCH_IDLE_STARTS_RECORDING` to `1` in `config.h` and reflash. Note that only the **REC button** can stop a recording — this is intentional on both hardware variants.
+> **To re-enable idle-touch recording:** Settings → **"idle rec"** toggles this at runtime with no reflash required. The setting is stored in NVS.
 
 > **Recording is always button-driven.** Only the **record button** stops a recording. This keeps recording UX consistent across both hardware variants.
 
@@ -309,7 +324,7 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 
 | Flag | Default | Description |
 |---|---|---|
-| `TOUCH_IDLE_STARTS_RECORDING` | `0` | Set to `1` to allow a tap on the idle screen to start recording. Disabled by default to prevent accidental recordings from a stray touch. |
+| `DEVICE_TZ_POSIX` | `PST8PDT,M3.2.0,M11.1.0` | POSIX TZ string for your timezone. Controls note timestamps and calendar event times. Common examples are in `config.h`. Change before compiling. |
 
 ---
 
