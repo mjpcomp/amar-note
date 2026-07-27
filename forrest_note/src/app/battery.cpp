@@ -6,18 +6,21 @@
 #include "../../config.h"
 #include <math.h>
 
-static bool palaAdcReady = false;
+static bool batAdcReady = false;
 
 void batteryInit() {
-  if (palaAdcReady) return;
+  if (batAdcReady) return;
   pinMode(BAT_ADC_PIN, INPUT);
-  analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
+  // ADC_ATTEN_DB_12 (formerly ADC_11db) → 0–3.9 V range, correct for the
+  // resistor-divided LiPo rail on this board.  Name changed in ESP-IDF 5.x;
+  // the Arduino-ESP32 3.x SDK already uses the new name.
+  analogSetPinAttenuation(BAT_ADC_PIN, ADC_ATTEN_DB_12);
   analogReadMilliVolts(BAT_ADC_PIN);
-  palaAdcReady = true;
+  batAdcReady = true;
 }
 
 float readBatteryVoltage() {
-  if (!palaAdcReady) batteryInit();
+  if (!batAdcReady) batteryInit();
   const int samples = 16;
   uint32_t sum = 0;
   for (int i = 0; i < samples; i++) { sum += analogReadMilliVolts(BAT_ADC_PIN); delay(2); }

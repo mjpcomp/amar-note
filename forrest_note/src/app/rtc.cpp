@@ -71,10 +71,14 @@ bool rtcWriteUtcTm(const struct tm& utc) {
 }
 
 time_t utcTmToEpoch(struct tm utc) {
-  // timegm() is not available on the ESP32 Arduino/ESP-IDF toolchain.
-  // Emulate it by saving the current TZ (typically DEVICE_TZ_POSIX after
-  // NTP sync), forcing UTC0 so mktime() treats the struct tm as UTC,
-  // then restoring — so local-time reads elsewhere are not clobbered.
+  // timegm() is not available on the ESP32 Arduino/ESP-IDF toolchain, so we
+  // emulate it by briefly forcing TZ=UTC0 so mktime() treats the struct as UTC,
+  // then restoring the original TZ string.
+  //
+  // Thread-safety: this function runs exclusively on core 1 (Arduino loop).
+  // The only other TZ-mutating call is syncTimeFromNTP(), which also runs on
+  // core 1.  The producer task (core 0) never touches getenv/setenv/tzset.
+  // There is therefore no cross-core race; no mutex is needed.
   char* prevTz = getenv("TZ");
   String saved = prevTz ? String(prevTz) : String();
   setenv("TZ", "UTC0", 1);

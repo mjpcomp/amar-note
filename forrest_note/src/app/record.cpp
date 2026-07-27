@@ -67,7 +67,10 @@ bool record() {
   ctx.finished = false;
 
   TaskHandle_t producer = NULL;
-  if (xTaskCreatePinnedToCore(recProducerTask, "recprod", 4096, &ctx, 6, &producer, 0) != pdPASS) {
+  // Stack 6144 bytes: producer itself is lean (loop + ring send), but
+  // audio_playback_read() on the S3 can have a deeper internal frame on
+  // some ESP-IDF versions.  6 KB costs nothing on 8 MB PSRAM.
+  if (xTaskCreatePinnedToCore(recProducerTask, "recprod", 6144, &ctx, 6, &producer, 0) != pdPASS) {
     vRingbufferDeleteWithCaps(ctx.ring);
     f.close();
     return false;
