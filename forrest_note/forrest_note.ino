@@ -453,12 +453,18 @@ static bool handleTouch() {
   }
 
   // ── SETTINGS ──────────────────────────────────────────────────────────
-  // Rows at y=38,70,102,134,166,198, h=28, x=16, w=168
-  // i=0 Sounds  i=1 Transfer  i=2 Device  i=3 Erase All  i=4 idle rec  i=5 Reset
+  // Rows drawn by showSettings(): y0=38, step=26, boxH=22
+  //   i=0 y=38   Sounds
+  //   i=1 y=64   Transfer
+  //   i=2 y=90   Device
+  //   i=3 y=116  Erase All
+  //   i=4 y=142  idle rec
+  //   i=5 y=168  Reset
+  // Touch zones use boxH=22 but we extend to step (26px) for easier tapping.
   if (state == STATE_SETTINGS) {
-    const int rowY[6] = { 38, 70, 102, 134, 166, 198 };
+    const int rowY[6] = { 38, 64, 90, 116, 142, 168 };   // must match showSettings() y0+i*step
     for (int i = 0; i < SETTINGS_COUNT; i++) {
-      if (touchHitTest(tx, ty, 16, rowY[i], 168, 28)) {
+      if (touchHitTest(tx, ty, 16, rowY[i], 168, 26)) {
         soundSelect();
         settingsCursor = i;
         if (i == 0) {
