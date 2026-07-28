@@ -132,13 +132,13 @@ The printable enclosure is the original creator's hardware design — download f
 ```
 Set up my environment to build this Amar Note ESP32-S3 firmware. Install arduino-cli if missing,
 install the esp32 board core version 3.2.0, and install the "Adafruit GFX Library" and "ArduinoJson"
-libraries. Then compile the sketch in ./forrest_note for an ESP32-S3 N8R8 board using these options:
+libraries. Then compile the sketch in ./amar_note for an ESP32-S3 N8R8 board using these options:
 PSRAM=opi, PartitionScheme=custom, CDCOnBoot=cdc, FlashSize=8M. Report any errors.
 ```
 
 **2. Flash it:**
 ```
-Flash the Amar Note firmware in ./forrest_note to my connected ESP32-S3 device. Hold the record
+Flash the Amar Note firmware in ./amar_note to my connected ESP32-S3 device. Hold the record
 button (BOOT/GPIO0), plug in USB while holding, keep holding until the write finishes.
 Detect the serial port, then run the upload with PSRAM=opi, PartitionScheme=custom,
 CDCOnBoot=cdc, FlashSize=8M. Confirm when hash is verified.
@@ -165,7 +165,7 @@ arduino-cli lib install "Adafruit GFX Library" "ArduinoJson"
 ```bash
 arduino-cli compile \
   -b "esp32:esp32:esp32s3:PSRAM=opi,PartitionScheme=custom,CDCOnBoot=cdc,FlashSize=8M" \
-  ./forrest_note
+  ./amar_note
 ```
 
 **4. Flash:** Hold BOOT button, plug in USB, keep holding:
@@ -173,7 +173,7 @@ arduino-cli compile \
 arduino-cli board list
 arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
   -b "esp32:esp32:esp32s3:PSRAM=opi,PartitionScheme=custom,CDCOnBoot=cdc,FlashSize=8M" \
-  ./forrest_note
+  ./amar_note
 ```
 
 ---
@@ -231,7 +231,7 @@ On the touch variant the FT6336 capacitive controller adds direct tap navigation
 
 > **Touch on the idle screen is disabled by default** to prevent an accidental brush of the screen from silently starting a recording. Recording is always started with the physical **REC button**; only stopping is touch-accessible after recording begins (which is also button-driven).
 >
-> **To re-enable idle-touch recording:** Settings → **"idle rec"** toggles this at runtime with no reflash required. The setting is stored in NVS.
+> **To re-enable idle-touch recording:** Settings → **"idle rec"** toggles this at runtime with no reflash required. The setting is stored in NVS under key `idlerec`.
 
 > **Recording is always button-driven.** Only the **record button** stops a recording. This keeps recording UX consistent across both hardware variants.
 
@@ -301,22 +301,51 @@ I'm heading to Soho House tomorrow at seven...
 
 ## ⚙️ Configuration reference
 
-All runtime config lives in NVS (namespace **`amar`**) and is set via the portal — never in code:
+All runtime config lives in NVS (namespace **`amar`**) and is set via the portal — never in code. The actual NVS key strings are listed below (these are what the firmware reads; useful if you ever inspect NVS directly via `esptool` or serial monitor).
 
-| NVS key | Values | Description |
+### Wi-Fi
+
+| NVS key | Default | Description |
 |---|---|---|
-| `WIFI_SSID` / `WIFI_PASS` | string | Wi-Fi credentials |
-| `OPENAI_KEY` | string | OpenAI API key |
-| `GROQ_KEY` | string | Groq API key |
-| `STT_PROVIDER` | `0` = OpenAI, `1` = Groq | Speech-to-text provider |
-| `ENRICH_PROVIDER` | `0` = OpenAI, `1` = Groq | AI enrichment (note cleanup) provider |
-| `ENRICH_MODEL` | Groq model ID string | Enrichment model when provider is Groq. One of: `llama-3.3-70b-versatile` (default), `llama-3.1-8b-instant`, `llama-4-scout-17b-16e-instruct`. Ignored when provider is OpenAI (always uses `gpt-4o-mini`). |
-| `repo` | `owner/repo` | GitHub repo for notes |
-| `branch` | string | GitHub branch (default `main`) |
-| `dir` | string | Vault folder path in repo |
-| `token` | string | GitHub fine-grained PAT |
-| `enabled` | bool | GitHub sync on/off |
-| `ai-enrich` | bool | AI enrichment on/off |
+| `ssid` | — | Wi-Fi network name |
+| `pass` | — | Wi-Fi password |
+
+### API keys
+
+| NVS key | Default | Description |
+|---|---|---|
+| `oaikey` | — | OpenAI API key |
+| `groqkey` | — | Groq API key |
+
+### STT provider
+
+| NVS key | Default | Description |
+|---|---|---|
+| `sttprov` | `0` | Speech-to-text provider: `0` = OpenAI (`whisper-1`), `1` = Groq (`whisper-large-v3-turbo`) |
+
+### AI enrichment
+
+| NVS key | Default | Description |
+|---|---|---|
+| `enrichprov` | `0` | Enrichment provider: `0` = OpenAI (`gpt-4o-mini`), `1` = Groq (model selectable). Auto-defaults to `1` on first boot if a Groq key is already present. |
+| `enrichmdl` | `llama-3.3-70b-versatile` | Groq enrichment model. One of: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `llama-4-scout-17b-16e-instruct`. Ignored when `enrichprov` is `0` (OpenAI always uses `gpt-4o-mini`). |
+
+### GitHub / Obsidian vault
+
+| NVS key | Default | Description |
+|---|---|---|
+| `ghtok` | — | GitHub fine-grained PAT (Contents: Read and write) |
+| `ghrepo` | — | GitHub repo in `owner/repo` format |
+| `ghbranch` | `main` | Branch to push notes to |
+| `ghdir` | `VoiceNotes` | Vault folder path in the repo |
+| `ghon` | `false` | GitHub sync on/off |
+| `ghai` | `true` | AI enrichment on/off |
+
+### Touch behaviour
+
+| NVS key | Default | Description |
+|---|---|---|
+| `idlerec` | `false` | When `true`, tapping the idle screen starts a recording. Disabled by default to prevent accidental pocket recordings. Toggle via **Settings → "idle rec"** — no reflash required. |
 
 Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default is US Pacific (`PST8PDT,M3.2.0,M11.1.0`). Common alternatives are documented inline in `config.h`.
 
@@ -331,4 +360,9 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 ## 🛠️ Troubleshooting
 
 - **Device won't stay on USB for flashing** → hold BOOT button while plugging in and through the write.
-- **Build error about duplicate `.cpp`** → delete any `* 2.cpp` /
+- **Build error about duplicate `.cpp`** → delete any `* 2.cpp` / `* 2.h` files that macOS may have created in the `src/` tree.
+- **Portal not appearing after connect** → navigate to `http://192.168.4.1` manually; some phones suppress captive-portal prompts.
+- **Notes not syncing** → check that `ghon` is `true` in the portal, and that your PAT has **Contents: Read and write** on the correct repo.
+- **Wrong timestamps on notes** → update `DEVICE_TZ_POSIX` in `config.h` to match your timezone and reflash.
+- **Enrichment silently skipped** → confirm the correct API key is set for your chosen `enrichprov`. Check the serial monitor — the firmware logs which provider it is trying and why it skipped.
+- **NVS namespace mismatch after upgrading from Forrest Note** → the namespace changed from `forrest` to `amar`. Do a full flash-erase (`esptool.py erase_flash`) before flashing Amar Note for the first time, then re-provision via the portal.
