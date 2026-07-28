@@ -245,7 +245,10 @@ static String base64Encode(const String& in) {
 struct NoteEvent { String title, start, end; bool allDay = false; };
 
 // ── AI enrichment ─────────────────────────────────────────────────────────
-// Always uses OpenAI GPT-4o-mini regardless of the STT provider choice.
+// Respects cfg::enrichProvider() and cfg::enrichModel():
+//   provider 0 (OpenAI): api.openai.com  key=cfg::openaiKey()  model=gpt-4o-mini
+//   provider 1 (Groq):   api.groq.com    key=cfg::groqKey()    model=cfg::enrichModel()
+//
 // Cap DynamicJsonDocument at a fixed 12 KB instead of transcript*2 to
 // avoid unpredictable PSRAM fragmentation on long notes.
 static bool enrichNote(const String& transcript, const String& nowLocal,
@@ -253,8 +256,13 @@ static bool enrichNote(const String& transcript, const String& nowLocal,
                        std::vector<String>& topics, NoteEvent& evt) {
   title = ""; summary = ""; cleaned = ""; topics.clear();
   evt = NoteEvent();
-  String key = cfg::openaiKey();
+
+  uint8_t provider = cfg::enrichProvider();
+  String  key      = (provider == 1) ? cfg::groqKey() : cfg::openaiKey();
   if (key.length() == 0 || WiFi.status() != WL_CONNECTED) return false;
+
+  const char* host  = (provider == 1) ? "api.groq.com"    : "api.openai.com";
+  String      model = (provider == 1) ? cfg::enrichModel() : String("gpt-4o-mini");
 
   String input = transcript;
   if (input.length() > 6000) input = input.substring(0, 6000);
@@ -262,7 +270,7 @@ static bool enrichNote(const String& transcript, const String& nowLocal,
   // Fixed 12 KB allocation — sufficient for the request envelope; the transcript
   // is injected as a raw string value, not duplicated in the document tree.
   DynamicJsonDocument reqDoc(12288);
-  reqDoc["model"] = "gpt-4o-mini";
+  reqDoc["model"] = model;
   reqDoc["temperature"] = 0;
   reqDoc.createNestedObject("response_format")["type"] = "json_object";
   JsonArray msgs = reqDoc.createNestedArray("messages");
@@ -300,9 +308,12 @@ static bool enrichNote(const String& transcript, const String& nowLocal,
     "Content-Type: application/json"
   };
   int status; String resp;
-  if (!httpsSend("api.openai.com", "POST", "/v1/chat/completions", headers, body, status, resp))
+  if (!httpsSend(host, "POST", "/v1/chat/completions", headers, body, status, resp))
     return false;
-  if (status != 200) { Serial.printf("[enrich] http %d\n", status); return false; }
+  if (status != 200) {
+    Serial.printf("[enrich] %s http %d\n", (provider==1)?"groq":"openai", status);
+    return false;
+  }
 
   DynamicJsonDocument outer(resp.length() + 1024);
   if (deserializeJson(outer, resp)) return false;
@@ -611,13 +622,17 @@ void obsidianSyncAll() {
     }
 
     String title, summary, cleaned; std::vector<String> topics; NoteEvent evt;
-    bool aiOn = cfg::githubAiEnrich(), haveKey = cfg::hasOpenAiKey();
+    bool aiOn    = cfg::githubAiEnrich();
+    // Check the key for whichever enrichment provider the user has configured.
+    bool haveKey = (cfg::enrichProvider() == 1) ? cfg::hasGroqKey() : cfg::hasOpenAiKey();
     if (aiOn && haveKey) {
       bool ok = enrichNote(transcript, noteCreatedDeviceLabel(num),
                            title, summary, cleaned, topics, evt);
-      Serial.printf("[sync] note %d enrich=%d title='%s'\n", num, ok, title.c_str());
+      Serial.printf("[sync] note %d enrich=%d provider=%d title='%s'\n",
+                    num, ok, cfg::enrichProvider(), title.c_str());
     } else {
-      Serial.printf("[sync] note %d enrich SKIPPED (aiOn=%d haveKey=%d)\n", num, aiOn, haveKey);
+      Serial.printf("[sync] note %d enrich SKIPPED (aiOn=%d haveKey=%d provider=%d)\n",
+                    num, aiOn, haveKey, cfg::enrichProvider());
     }
     if (title.length() == 0) {
       title = firstWords(transcript, 1);
