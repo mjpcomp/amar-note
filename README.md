@@ -65,6 +65,7 @@ Credit where it's due — the original firmware already provided: voice **record
 | 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
 | 💾 **USB Mass Storage** | ➕ New | Menu item **"USB Drive"** mounts the SD card as a USB MSC drive on any host computer — browse, copy, or delete files directly. Hold REC to exit MSC mode; the SD remounts and the note index reloads automatically. Requires ESP32 Arduino core ≥ 2.0. |
 | 🕒 **Portable UTC epoch conversion** | 🔁 Changed | `utcTmToEpoch()` now uses a portable `mktime()` emulation (TZ save/restore) instead of `timegm()`, which is not available in the ESP32 Arduino/ESP-IDF toolchain. |
+| 🐱 **Tamagotchi** | ➕ New | Sixth menu tile (cursor 5) — cat-face icon, `STATE_TAMAGOTCHI` state, `showTamagotchi()` stub screen. Pet logic ships in its own module; the tile and screen are fully wired. |
 
 ---
 
@@ -211,10 +212,26 @@ A **tap** is any press released before the long-hold threshold (~450 ms); a **lo
 | **Wake to menu** | Hold **power** while powering on |
 | **Wake straight to record** | Hold **record** while powering on |
 | **USB Drive mode** | Menu → **USB Drive** → tap **record** → hold **record** to exit |
+| **Tamagotchi** | Menu → **Tamagotchi** tile (cursor 5) → any button to return |
 
 ### Touch screen (ESP32-S3-Touch-ePaper-1.54 only)
 
 On the touch variant the FT6336 capacitive controller adds direct tap navigation across all menus. **Buttons remain fully functional** — touch and buttons work side by side.
+
+#### Main menu layout
+
+The menu uses an **Option-D hybrid layout**: two tall portrait tiles on top (Notes, Tags) and a 2×2 icon-tile grid below (Sync, Settings, USB Drive, Tamagotchi).
+
+| Tile | Position | Icon | Cursor |
+|---|---|---|---|
+| **Notes** | top-left | document lines | 0 |
+| **Tags** | top-right | tag shape | 1 |
+| **Sync** | mid-left | circular arrows | 2 |
+| **Settings** | mid-right | gear / cog | 3 |
+| **USB Drive** | bottom-left | USB trident | 4 |
+| **Tamagotchi** | bottom-right | cute cat face 🐱 | 5 |
+
+#### Touch gestures
 
 | Touch gesture | Action |
 |---|---|
@@ -228,6 +245,7 @@ On the touch variant the FT6336 capacitive controller adds direct tap navigation
 | **Tap upper area of note detail** | Play back the recording |
 | **Tap lower area of note detail** | Scroll to next page / advance to next note |
 | **Tap bottom strip (y ≥ 180)** | Go back (equivalent to long-hold REC) |
+| **Tap Tamagotchi screen (anywhere)** | Return to menu |
 
 > **Touch on the idle screen is disabled by default** to prevent an accidental brush of the screen from silently starting a recording. Recording is always started with the physical **REC button**; only stopping is touch-accessible after recording begins (which is also button-driven).
 >
