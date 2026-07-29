@@ -49,12 +49,12 @@ extern "C" {
 
 // All pin, timing, path and threshold constants live in config.h.
 
-// ─── Content arrays ──────────────────────────────────────────────────────────
+// ─── Content arrays ───────────────────────────────────────────────────────────────────
 const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Buy", "Private" };
-const char* MENU_ITEMS[]     = { "Notes", "Tags", "Sync", "Settings", "USB Drive" };
-const char* SETTINGS_ITEMS[] = { "Sounds", "Transfer", "Device", "Erase All", "idle rec", "Reset" };
+const char* MENU_ITEMS[]      = { "Notes", "Tags", "Sync", "Settings", "USB Drive", "Tamagotchi" };
+const char* SETTINGS_ITEMS[]  = { "Sounds", "Transfer", "Device", "Erase All", "idle rec", "Reset" };
 
-// ─── Global variable definitions ─────────────────────────────────────────────
+// ─── Global variable definitions ───────────────────────────────────────────────────────
 board_power_bsp_t      board(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
 epaper_driver_display* display = nullptr;
 
@@ -99,13 +99,13 @@ uint32_t batWarnShowUntilMs = 0;
 char tags[20][32];
 int  tagCount = 0;
 
-// ─── Power latch ──────────────────────────────────────────────────────────────
+// ─── Power latch ────────────────────────────────────────────────────────────────────
 void keepBatteryPowerOn() {
   pinMode(PWR_HOLD_PIN, OUTPUT);
   digitalWrite(PWR_HOLD_PIN, HIGH);
 }
 
-// ─── Flow functions ───────────────────────────────────────────────────────────
+// ─── Flow functions ──────────────────────────────────────────────────────────────────
 void startRecordFlow() {
   state = STATE_RECORDING;
   showRecording();
@@ -235,7 +235,7 @@ void startTransferMode() {
   showTransferMode(transferUrl.c_str());
 }
 
-// ─── Setup ────────────────────────────────────────────────────────────────────
+// ─── Setup ─────────────────────────────────────────────────────────────────────────────
 void setup() {
   keepBatteryPowerOn();
 
@@ -310,7 +310,7 @@ void setup() {
   }
 }
 
-// ─── Serial provisioning ──────────────────────────────────────────────────────
+// ─── Serial provisioning ────────────────────────────────────────────────────────────────
 void handleSerialConfig() {
   static String line;
   static String pendingSsid;
@@ -371,22 +371,21 @@ void handleSerialConfig() {
   }
 }
 
-// ─── Touch dispatch helper ────────────────────────────────────────────────────
+// ─── Touch dispatch helper ──────────────────────────────────────────────────────────────────
 //
 // Called at the top of loop() before button handling.  Returns true if a touch
 // event was consumed (so the caller can skip button polling for this tick).
 //
-// Hit-zone geometry mirrors the layout constants in ui.cpp exactly.
-//
-// Recording is intentionally excluded from touch: REC button is the only way
-// to start or stop a recording on both hardware variants.
-//
-// Touch on the idle screen is off by default (cfg::idleTouchRecord() == false)
-// to prevent an accidental brush from silently beginning a recording.
-// Toggle via Settings → "idle rec" on the device — no reflash required.
+// Hit-zone geometry mirrors the layout constants in ui.cpp showMenu() exactly:
 //
 //   STATE_IDLE       (no action by default — see Settings → idle rec)
-//   STATE_MENU       tiles/rows    → select item
+//   STATE_MENU       Option-D hybrid 2×2 layout:
+//                      cursor 0  Notes      (8,  30, 90, 50)
+//                      cursor 1  Tags       (102,30, 90, 50)
+//                      cursor 2  Sync       (8,  86, 88, 48)
+//                      cursor 3  Settings   (104,86, 88, 48)
+//                      cursor 4  USB Drive  (8, 138, 88, 48)
+//                      cursor 5  Tamagotchi (104,138,88, 48)
 //   STATE_SETTINGS   rows          → select item
 //   STATE_TAG_SELECT pills         → select tag
 //   STATE_TAG_BROWSER big card     → drill into list; bottom strip = back
@@ -394,12 +393,13 @@ void handleSerialConfig() {
 //   STATE_NOTE_DETAIL top area     → play; mid = scroll/next; bottom strip = back
 //   STATE_DELETE_CONFIRM halves    → confirm (left) / cancel (right)
 //   STATE_TRANSFER   anywhere      → exit transfer mode
+//   STATE_TAMAGOTCHI anywhere      → back to menu
 //
 static bool handleTouch() {
   if (state == STATE_RECORDING || state == STATE_USB_MSC) return false;
 
   uint16_t tx, ty;
-  if (!touchRead(&tx, &ty)) return false;
+  if (!touchPoll(&tx, &ty)) return false;
 
   resetActivity();
 
@@ -414,45 +414,54 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── MENU ───────────────────────────────────────────────────────────────
-  // Row A tiles: Notes (x=10,y=30,w=88,h=44)  Tags (x=102,y=30,w=88,h=44)
-  // Row B–D:     y=80/113/146, x=10, w=180, h=28
+  // ── MENU ──────────────────────────────────────────────────────────────────
+  // Row A tiles: Notes (x=8,y=30,w=90,h=50)  Tags (x=102,y=30,w=90,h=50)
+  // Row B 2x2:   Sync       (8,  86, 88, 48)
+  //              Settings   (104, 86, 88, 48)
+  //              USB Drive  (8,  138, 88, 48)
+  //              Tamagotchi (104,138, 88, 48)
   if (state == STATE_MENU) {
-    if (touchHitTest(tx, ty, 10, 30, 88, 44)) {          // Notes tile
+    if (touchHitTest(tx, ty, 8,   30, 90, 50)) {          // Notes
       soundSelect();
       activeFilter = -1; listCursor = 0;
       state = STATE_NOTE_LIST;
       showNoteList(listCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 102, 30, 88, 44)) {         // Tags tile
+    if (touchHitTest(tx, ty, 102, 30, 90, 50)) {          // Tags
       soundSelect();
       tagCursor = 0;
       state = STATE_TAG_BROWSER;
       showTagBrowser(tagCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 10, 80, 180, 28)) {         // Sync
+    if (touchHitTest(tx, ty, 8,   86, 88, 48)) {          // Sync
       soundSelect();
       startSyncFlow();
       return true;
     }
-    if (touchHitTest(tx, ty, 10, 113, 180, 28)) {        // Settings
+    if (touchHitTest(tx, ty, 104, 86, 88, 48)) {          // Settings
       soundSelect();
       settingsCursor = 0;
       state = STATE_SETTINGS;
       showSettings(settingsCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 10, 146, 180, 28)) {        // USB Drive
+    if (touchHitTest(tx, ty, 8,   138, 88, 48)) {         // USB Drive
       soundSelect();
       enterMscMode();
+      return true;
+    }
+    if (touchHitTest(tx, ty, 104, 138, 88, 48)) {         // Tamagotchi
+      soundSelect();
+      state = STATE_TAMAGOTCHI;
+      showTamagotchi();
       return true;
     }
     return false;
   }
 
-  // ── SETTINGS ──────────────────────────────────────────────────────────
+  // ── SETTINGS ───────────────────────────────────────────────────────────
   // Rows drawn by showSettings(): y0=38, step=26, boxH=22
   //   i=0 y=38   Sounds
   //   i=1 y=64   Transfer
@@ -460,9 +469,8 @@ static bool handleTouch() {
   //   i=3 y=116  Erase All
   //   i=4 y=142  idle rec
   //   i=5 y=168  Reset
-  // Touch zones use boxH=22 but we extend to step (26px) for easier tapping.
   if (state == STATE_SETTINGS) {
-    const int rowY[6] = { 38, 64, 90, 116, 142, 168 };   // must match showSettings() y0+i*step
+    const int rowY[6] = { 38, 64, 90, 116, 142, 168 };
     for (int i = 0; i < SETTINGS_COUNT; i++) {
       if (touchHitTest(tx, ty, 16, rowY[i], 168, 26)) {
         soundSelect();
@@ -489,7 +497,6 @@ static bool handleTouch() {
         return true;
       }
     }
-    // Bottom-strip back gesture (y >= 180)
     if (ty >= 180) {
       soundBack();
       state = STATE_MENU;
@@ -500,7 +507,6 @@ static bool handleTouch() {
   }
 
   // ── TAG SELECT (post-record) ───────────────────────────────────────────
-  // Pills: x=36, w=128, h=21, gap=7, y0=40
   if (state == STATE_TAG_SELECT) {
     if (tagCount > 0) {
       const int x = 36, w = 128, h = 21, gap = 7, y0 = 40;
@@ -518,9 +524,7 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── TAG BROWSER ───────────────────────────────────────────────────────
-  // Big card: x=28,y=56,w=144,h=54 → drill in
-  // Bottom strip (y>=180) → back to menu
+  // ── TAG BROWSER ────────────────────────────────────────────────────────
   if (state == STATE_TAG_BROWSER) {
     if (touchHitTest(tx, ty, 28, 56, 144, 54)) {
       soundSelect();
@@ -535,7 +539,6 @@ static bool handleTouch() {
       showMenu(menuCursor);
       return true;
     }
-    // Tap outside card: cycle to next tag
     if (tagCount > 0) {
       soundNext();
       tagCursor = (tagCursor + 1) % tagCount;
@@ -545,9 +548,7 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── NOTE LIST ─────────────────────────────────────────────────────────
-  // Cards: x=16, w=168, h=39, y0=43, step=47
-  // Bottom strip (y>=180) → back to menu
+  // ── NOTE LIST ────────────────────────────────────────────────────────────
   if (state == STATE_NOTE_LIST) {
     int count = filteredCount();
     if (ty >= 180) {
@@ -576,10 +577,7 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── NOTE DETAIL ───────────────────────────────────────────────────────
-  // Bottom strip (y>=180) → back to list
-  // Upper 2/3 (y<140) → play audio
-  // Lower area but above strip (140<=y<180) → scroll/next
+  // ── NOTE DETAIL ──────────────────────────────────────────────────────────
   if (state == STATE_NOTE_DETAIL) {
     if (ty >= 180) {
       soundBack();
@@ -599,7 +597,6 @@ static bool handleTouch() {
       }
       return true;
     }
-    // 140..179: scroll page or advance to next note
     {
       soundNext();
       const int linesPerPage = 7;
@@ -616,8 +613,7 @@ static bool handleTouch() {
     }
   }
 
-  // ── DELETE CONFIRM ────────────────────────────────────────────────────
-  // Left half (x<100) = confirm; right half (x>=100) = cancel
+  // ── DELETE CONFIRM ────────────────────────────────────────────────────────
   if (state == STATE_DELETE_CONFIRM) {
     if (tx < 100) {
       int idx = noteAtFilteredIndex(listCursor);
@@ -634,8 +630,7 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── RESET CONFIRM ─────────────────────────────────────────────────────
-  // Left half = erase; right half = cancel
+  // ── RESET CONFIRM ─────────────────────────────────────────────────────────
   if (state == STATE_RESET_CONFIRM) {
     if (tx < 100) {
       cfg::factoryReset();
@@ -651,8 +646,7 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── DELETE ALL CONFIRM ────────────────────────────────────────────────
-  // Two option rows at y=76 and y=110, h=28; bottom-strip = cancel
+  // ── DELETE ALL CONFIRM ────────────────────────────────────────────────────
   if (state == STATE_DELETE_ALL_CONFIRM) {
     if (ty >= 180) {
       soundBack();
@@ -670,7 +664,6 @@ static bool handleTouch() {
       showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
       return true;
     }
-    // Tap selected option again = confirm
     if (touchHitTest(tx, ty, 20, 76 + eraseAllCursor * 34, 160, 28)) {
       bool alsoVault = (eraseAllCursor == 1);
       deleteAllNotes(alsoVault);
@@ -686,8 +679,7 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── TRANSFER ──────────────────────────────────────────────────────────
-  // Tap anywhere to exit (mirrors hold-rec)
+  // ── TRANSFER ─────────────────────────────────────────────────────────────
   if (state == STATE_TRANSFER) {
     soundBack();
     stopTransferMode();
@@ -696,7 +688,7 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── DEVICE INFO ───────────────────────────────────────────────────────
+  // ── DEVICE INFO ──────────────────────────────────────────────────────────
   if (state == STATE_DEVICE_INFO) {
     soundBack();
     state = STATE_SETTINGS;
@@ -704,7 +696,243 @@ static bool handleTouch() {
     return true;
   }
 
+  // ── TAMAGOTCHI ───────────────────────────────────────────────────────────
+  // Any tap returns to the menu (stub screen has no sub-interactions yet).
+  if (state == STATE_TAMAGOTCHI) {
+    soundBack();
+    state = STATE_MENU;
+    showMenu(menuCursor);
+    return true;
+  }
+
   return false;
 }
 
-// ───
+// ─── Main loop ────────────────────────────────────────────────────────────────────────────
+void loop() {
+  handleSerialConfig();
+  serviceDisplay();
+
+  if (handleTouch()) return;
+
+  if (transferServerActive) {
+    transferServer.handleClient();
+    if (captivePortalActive) dnsServer.processNextRequest();
+  }
+
+  ButtonEvent recEv = pollButton(BTN_REC, false);
+  ButtonEvent pwrEv = pollButton(BTN_PWR, true);
+
+  if (state == STATE_IDLE) {
+    if (recEv == EV_SINGLE || recEv == EV_LONG) startRecordFlow();
+    if (pwrEv == EV_SINGLE) {
+      menuCursor = 0;
+      state = STATE_MENU;
+      showMenu(menuCursor);
+    }
+    checkBatteryWarning();
+    checkAutoSleep();
+    return;
+  }
+
+  if (state == STATE_RECORDING) {
+    if (recEv == EV_SINGLE || recEv == EV_LONG) g_stopRecording = true;
+    return;
+  }
+
+  if (state == STATE_SAVED || state == STATE_TAG_SELECT) {
+    if (recEv == EV_SINGLE) {
+      saveTag(lastRecNum, tags[constrain(tagCursor, 0, tagCount - 1)]);
+      enterUltraSleep();
+    }
+    if (recEv == EV_LONG) enterUltraSleep();
+    if (pwrEv == EV_SINGLE) {
+      tagCursor = (tagCursor + 1) % max(tagCount, 1);
+      showTagSelect(tagCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_MENU) {
+    if (recEv == EV_SINGLE) {
+      menuCursor = (menuCursor + 1) % MENU_COUNT;
+      showMenu(menuCursor);
+    }
+    if (recEv == EV_LONG) enterUltraSleep();
+    if (pwrEv == EV_SINGLE) {
+      switch (menuCursor) {
+        case 0: activeFilter = -1; listCursor = 0; state = STATE_NOTE_LIST; showNoteList(listCursor); break;
+        case 1: tagCursor = 0; state = STATE_TAG_BROWSER; showTagBrowser(tagCursor); break;
+        case 2: startSyncFlow(); break;
+        case 3: settingsCursor = 0; state = STATE_SETTINGS; showSettings(settingsCursor); break;
+        case 4: enterMscMode(); break;
+        case 5: state = STATE_TAMAGOTCHI; showTamagotchi(); break;
+      }
+    }
+    return;
+  }
+
+  if (state == STATE_SETTINGS) {
+    if (recEv == EV_SINGLE) {
+      settingsCursor = (settingsCursor + 1) % SETTINGS_COUNT;
+      showSettings(settingsCursor);
+    }
+    if (recEv == EV_LONG) {
+      state = STATE_MENU; showMenu(menuCursor);
+    }
+    if (pwrEv == EV_SINGLE) {
+      if (settingsCursor == 0) {
+        amarSoundSetEnabled(!amarSoundIsEnabled());
+        showSettings(settingsCursor);
+      } else if (settingsCursor == 1) {
+        startTransferMode();
+      } else if (settingsCursor == 2) {
+        state = STATE_DEVICE_INFO; showDeviceInfo();
+      } else if (settingsCursor == 3) {
+        eraseAllCursor = 0;
+        state = STATE_DELETE_ALL_CONFIRM;
+        showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
+      } else if (settingsCursor == 4) {
+        cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
+        showSettings(settingsCursor);
+      } else {
+        state = STATE_RESET_CONFIRM; showResetConfirm();
+      }
+    }
+    return;
+  }
+
+  if (state == STATE_TAG_BROWSER) {
+    if (recEv == EV_SINGLE) {
+      tagCursor = (tagCursor + 1) % max(tagCount, 1);
+      showTagBrowser(tagCursor);
+    }
+    if (recEv == EV_LONG || pwrEv == EV_LONG) {
+      state = STATE_MENU; showMenu(menuCursor);
+    }
+    if (pwrEv == EV_SINGLE) {
+      activeFilter = tagCursor; listCursor = 0;
+      state = STATE_NOTE_LIST; showNoteList(listCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_NOTE_LIST) {
+    if (recEv == EV_SINGLE) {
+      int count = filteredCount();
+      if (count > 0) listCursor = (listCursor + 1) % count;
+      showNoteList(listCursor);
+    }
+    if (recEv == EV_LONG || pwrEv == EV_LONG) {
+      state = STATE_MENU; showMenu(menuCursor);
+    }
+    if (pwrEv == EV_SINGLE) {
+      detailScrollPage = 0;
+      state = STATE_NOTE_DETAIL; showNoteDetail(listCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_NOTE_DETAIL) {
+    if (recEv == EV_SINGLE) {
+      int idx = noteAtFilteredIndex(listCursor);
+      if (idx >= 0) {
+        char wavPath[64];
+        snprintf(wavPath, sizeof(wavPath), "%s/note_%03d.wav", NOTES_DIR, noteIndex[idx].num);
+        showPlaybackOverlay();
+        playWavFile(wavPath);
+        showNoteDetail(listCursor);
+      }
+    }
+    if (recEv == EV_LONG) {
+      state = STATE_DELETE_CONFIRM;
+      int idx = noteAtFilteredIndex(listCursor);
+      if (idx >= 0) showDeleteConfirm(noteIndex[idx].num);
+    }
+    if (pwrEv == EV_SINGLE) {
+      const int linesPerPage = 7;
+      int totalPages = (detailTotalLines + linesPerPage - 1) / linesPerPage;
+      if (detailScrollPage + 1 < totalPages) {
+        detailScrollPage++;
+        showNoteDetail(listCursor);
+      } else {
+        detailScrollPage = 0;
+        state = STATE_NOTE_LIST; showNoteList(listCursor);
+      }
+    }
+    if (pwrEv == EV_LONG) {
+      state = STATE_NOTE_LIST; showNoteList(listCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_DELETE_CONFIRM) {
+    if (recEv == EV_SINGLE) {
+      int idx = noteAtFilteredIndex(listCursor);
+      if (idx >= 0) { deleteNote(noteIndex[idx].num); soundDelete(); }
+      detailScrollPage = 0;
+      listCursor = constrain(listCursor, 0, max(filteredCount() - 1, 0));
+      state = STATE_NOTE_LIST; showNoteList(listCursor);
+    }
+    if (pwrEv == EV_SINGLE) {
+      state = STATE_NOTE_DETAIL; showNoteDetail(listCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_TRANSFER) {
+    if (recEv == EV_LONG) {
+      soundBack();
+      stopTransferMode();
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_RESET_CONFIRM) {
+    if (recEv == EV_SINGLE) {
+      cfg::factoryReset(); soundDelete();
+      showResetDone(); delay(1400);
+      ESP.restart();
+    }
+    if (pwrEv == EV_SINGLE) {
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_DEVICE_INFO) {
+    if (recEv == EV_SINGLE || pwrEv == EV_SINGLE) {
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_DELETE_ALL_CONFIRM) {
+    if (recEv == EV_SINGLE) {
+      eraseAllCursor = (eraseAllCursor + 1) % 2;
+      showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
+    }
+    if (recEv == EV_LONG) {
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    if (pwrEv == EV_SINGLE) {
+      bool alsoVault = (eraseAllCursor == 1);
+      deleteAllNotes(alsoVault);
+      activeFilter = -1; listCursor = 0;
+      soundDelete();
+      showDeleteAllDone(alsoVault); delay(1300);
+      menuCursor = 0;
+      state = STATE_MENU; showMenu(menuCursor);
+    }
+    return;
+  }
+
+  if (state == STATE_TAMAGOTCHI) {
+    if (recEv == EV_SINGLE || recEv == EV_LONG || pwrEv == EV_SINGLE) {
+      soundBack();
+      state = STATE_MENU; showMenu(menuCursor);
+    }
+    return;
+  }
+}
