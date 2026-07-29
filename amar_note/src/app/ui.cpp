@@ -765,6 +765,9 @@ void showTransferMode(const char* ip) {
 }
 
 // ─── Settings screen ──────────────────────────────────────────────────────────
+//
+// Row order must match SETTINGS_ITEMS[] in amar_note.ino:
+//   0 Sounds   1 Transfer   2 Device   3 Erase All   4 idle rec   5 Reset
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
@@ -786,10 +789,10 @@ void showSettings(int cursor) {
     } else if (row == 3) {
       drawStr(28, y + 6, "erase all", 1, col);
     } else if (row == 4) {
-      drawStr(28, y + 6, "reset", 1, col);
-    } else {
       drawStr(28, y + 6, "idle rec", 1, col);
       drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
+    } else {
+      drawStr(28, y + 6, "reset", 1, col);
     }
   }
   refresh();
