@@ -61,7 +61,8 @@ void touchInit(void) {
     Serial.println("[touch] FT6336 init OK");
 }
 
-bool touchRead(uint16_t *sx, uint16_t *sy) {
+// touchPoll — named to avoid collision with Arduino touchRead(pin) GPIO API.
+bool touchPoll(uint16_t *sx, uint16_t *sy) {
     if (ft_dev == NULL) return false;
 
     uint8_t count = 0;
@@ -74,28 +75,23 @@ bool touchRead(uint16_t *sx, uint16_t *sy) {
     uint16_t raw_x = (uint16_t)((buf[0] & 0x0F) << 8) | buf[1];
     uint16_t raw_y = (uint16_t)((buf[2] & 0x0F) << 8) | buf[3];
 
-    // Panel is portrait-rotated 90° CCW relative to the ePaper framebuffer.
-    // Mapping verified against the Tamagotchi build on the same hardware:
-    //   screen_x = 199 - scale(raw_y)
-    //   screen_y =       scale(raw_x)
-    uint16_t screen_x = (uint16_t)(199 - (raw_y * 200 / PANEL_MAX));
-    uint16_t screen_y = (uint16_t)(raw_x * 200 / PANEL_MAX);
-
-    if (screen_x > 199) screen_x = 199;
-    if (screen_y > 199) screen_y = 199;
-
-    // De-bounce: swallow rapid repeats
+    // De-bounce
     uint32_t now = millis();
     if (now - lastTouchMs < TOUCH_DEBOUNCE_MS) return false;
     lastTouchMs = now;
 
-    *sx = screen_x;
-    *sy = screen_y;
+    // The FT6336 on this panel reports in portrait 320×320 native space.
+    // The ePaper display is 200×200.  Map linearly and clamp.
+    *sx = (uint16_t)((raw_x * 200UL) / PANEL_MAX);
+    *sy = (uint16_t)((raw_y * 200UL) / PANEL_MAX);
+    *sx = (*sx > 199) ? 199 : *sx;
+    *sy = (*sy > 199) ? 199 : *sy;
+
     return true;
 }
 
 bool touchHitTest(uint16_t sx, uint16_t sy,
                   int rx, int ry, int rw, int rh) {
-    return (sx >= (uint16_t)rx && sx < (uint16_t)(rx + rw) &&
-            sy >= (uint16_t)ry && sy < (uint16_t)(ry + rh));
+    return (int)sx >= rx && (int)sx < rx + rw &&
+           (int)sy >= ry && (int)sy < ry + rh;
 }

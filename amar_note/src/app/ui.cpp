@@ -109,6 +109,80 @@ void iconUsbDrive(int cx, int cy) {
   hline(cx-24, cy+2, 22, BLACK);
 }
 
+// ── Menu tile icon: circular sync arrows (small, centred in tile) ────────────
+static void iconSyncSmall(int cx, int cy, uint8_t col) {
+  strokeCircle(cx, cy, 12, 2, col);
+  // Top-right arrow head pointing clockwise
+  fillRect(cx+7, cy-14, 7, 7, col == WHITE ? BLACK : WHITE);  // erase arc segment
+  thickLine(cx+7,  cy-12, cx+13, cy-12, 2, col);
+  thickLine(cx+13, cy-12, cx+9,  cy-17, 2, col);
+  thickLine(cx+13, cy-12, cx+9,  cy-7,  2, col);
+  // Bottom-left arrow head pointing clockwise
+  fillRect(cx-14, cy+7, 7, 7, col == WHITE ? BLACK : WHITE);
+  thickLine(cx-13, cy+12, cx-7,  cy+12, 2, col);
+  thickLine(cx-7,  cy+12, cx-11, cy+17, 2, col);
+  thickLine(cx-7,  cy+12, cx-11, cy+7,  2, col);
+}
+
+// ── Menu tile icon: gear / cog (Settings) ────────────────────────────────────
+static void iconGear(int cx, int cy, uint8_t col) {
+  // Outer ring with 6 teeth
+  strokeCircle(cx, cy, 12, 2, col);
+  fillCircle(cx, cy, 5, col);              // hub
+  strokeCircle(cx, cy, 5, 2, col == WHITE ? BLACK : WHITE);  // hub hole
+  // 6 teeth at 0, 60, 120, 180, 240, 300 degrees
+  const int toothLen = 5;
+  const float angles[6] = {0.0f, 1.047f, 2.094f, 3.141f, 4.189f, 5.236f};
+  for (int i = 0; i < 6; i++) {
+    float a = angles[i];
+    int x0 = cx + (int)(12 * cosf(a));
+    int y0 = cy + (int)(12 * sinf(a));
+    int x1 = cx + (int)((12 + toothLen) * cosf(a));
+    int y1 = cy + (int)((12 + toothLen) * sinf(a));
+    thickLine(x0, y0, x1, y1, 3, col);
+  }
+}
+
+// ── Menu tile icon: USB trident / plug ───────────────────────────────────────
+static void iconUsbPlug(int cx, int cy, uint8_t col) {
+  // Connector body
+  strokeRoundRect(cx-9, cy-4, 18, 12, 3, 2, col);
+  // Cable stem
+  fillRect(cx-2, cy+8, 4, 8, col);
+  // Trident: vertical stem + 3 prongs
+  fillRect(cx-1, cy-14, 3, 10, col);  // stem
+  // Left prong
+  thickLine(cx-6, cy-14, cx-6, cy-9, 2, col);
+  thickLine(cx-6, cy-14, cx-1, cy-14, 2, col);
+  // Right prong
+  thickLine(cx+6, cy-14, cx+6, cy-9, 2, col);
+  thickLine(cx+6, cy-14, cx+1, cy-14, 2, col);
+  // Top dot
+  fillCircle(cx, cy-17, 2, col);
+}
+
+// ── Menu tile icon: cute cat face (Tamagotchi) ───────────────────────────────
+//
+// Head circle + two pointy ears + two dot eyes + small W-mouth.
+static void iconCatFace(int cx, int cy, uint8_t col) {
+  // Head
+  strokeCircle(cx, cy+2, 13, 2, col);
+  // Left ear (triangle: filled)
+  fillTriangle(cx-13, cy-8,  cx-6,  cy-8,  cx-10, cy-18, col);
+  // Right ear
+  fillTriangle(cx+13, cy-8,  cx+6,  cy-8,  cx+10, cy-18, col);
+  // Eyes
+  fillCircle(cx-5, cy,   2, col);
+  fillCircle(cx+5, cy,   2, col);
+  // Nose dot
+  fillCircle(cx,   cy+4, 1, col);
+  // W-mouth
+  thickLine(cx-5, cy+6, cx-2, cy+9,  2, col);
+  thickLine(cx-2, cy+9, cx,   cy+7,  2, col);
+  thickLine(cx,   cy+7, cx+2, cy+9,  2, col);
+  thickLine(cx+2, cy+9, cx+5, cy+6,  2, col);
+}
+
 // ─── Layout helpers ────────────────────────────────────────────────────────────────────────────
 void drawHeader(const char* title, const char* rightInfo) {
   fillRect(0, 0, W, 28, BLACK);
@@ -318,77 +392,39 @@ void showBatteryLow(int pct) {
 }
 
 // ─── Recording screen: animated microphone with sound arcs ────────────────────────────────────
-//
-// Layout (200×200, black bg, all white):
-//   Mic barrel centre: cx=100, cy=88
-//   Barrel: 22px wide, 36px tall rounded rect  (cx-11, cy-18..cy+18)
-//   Dome cap: semicircle r=11 at the top        (cx, cy-18)
-//   Neck pickup arc: strokeCircle r=22, masked top half away
-//   Stem: 3px wide, 14px tall below barrel      (cx-1, cy+18..cy+32)
-//   Base: hline 30px centred at cy+32
-//   Sound arcs: 2 strokeCircles centred on mic midpoint (cx, cy),
-//               radii = recCircleR+8 and recCircleR+20,
-//               left+right halves only (top/bottom masked black)
-
 static float recCircleR = 24.0f;
 
-// Draw the static microphone body centred at (cx, micCy).
-// micCy is the vertical centre of the barrel.
 static void drawMicBody(int cx, int micCy) {
-  // Barrel
   fillRoundRect(cx - 11, micCy - 18, 22, 36, 10, WHITE);
-  // Dome cap (top semicircle already covered by the rounded top of the barrel,
-  // but we add a filled circle at the very top to make it look more capsule-like)
   fillCircle(cx, micCy - 18, 11, WHITE);
-
-  // Neck pickup arc — a full strokeCircle r=22 then mask the top half black
   strokeCircle(cx, micCy, 22, 3, WHITE);
-  fillRect(cx - 26, micCy - 26, 52, 28, BLACK);  // erase top half of arc
-
-  // Stem
+  fillRect(cx - 26, micCy - 26, 52, 28, BLACK);
   fillRect(cx - 1, micCy + 18, 3, 14, WHITE);
-  // Base
   fillRect(cx - 15, micCy + 31, 30, 3, WHITE);
 }
 
-// Draw two animated sound-arcs around the mic.
-// arcR = current smoothed level radius (24..68).
-// Arcs are drawn as full strokeCircles, then the top and bottom halves
-// are masked with black rectangles so only left & right sides are visible.
 static void drawSoundArcs(int cx, int micCy, int arcR) {
-  if (arcR < 26) return;  // too small to be visible outside the mic body
-
-  // Outer arc (slightly thinner)
+  if (arcR < 26) return;
   strokeCircle(cx, micCy, arcR,      2, WHITE);
-  // Inner arc — closer to the mic
   int inner = arcR - 12;
   if (inner > 24) strokeCircle(cx, micCy, inner, 2, WHITE);
-
-  // Mask top quarter (above mic dome) and bottom quarter (below base)
-  // so only the left & right side fans show through.
   int maskH = arcR / 2 + 2;
-  fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, BLACK);  // top
-  fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, BLACK);  // bottom
+  fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, BLACK);
+  fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, BLACK);
 }
 
 static void drawRecordingScreen(uint32_t elapsedMs, int level) {
   (void)elapsedMs;
   fillRect(0, 0, W, H, BLACK);
-
-  // Smooth the level toward the target radius — same logic as before.
   float target = 26.0f + (float)level * 42.0f / 152.0f;
   if (target < 26.0f) target = 26.0f;
   if (target > 68.0f) target = 68.0f;
   float a = (target > recCircleR) ? 0.55f : 0.18f;
   recCircleR += (target - recCircleR) * a;
-
-  int cx     = W / 2;       // 100
-  int micCy  = 90;          // mic barrel centre — slightly above screen centre
+  int cx     = W / 2;
+  int micCy  = 90;
   int arcR   = (int)(recCircleR + 0.5f);
-
-  // Sound arcs first (behind mic body)
   drawSoundArcs(cx, micCy, arcR);
-  // Mic body on top
   drawMicBody(cx, micCy);
 }
 
@@ -434,60 +470,89 @@ void showTagSelect(int cursor) {
 
 // ─── Menu layout ──────────────────────────────────────────────────────────────────────────────
 //
-// Screen is 200 x 200 px.  Header uses y=0..27 (28px).  We have 172px below.
+// Screen is 200×200 px.  Available below header (y=0..27): 172 px.
 //
-// Row A  — Notes (left tile) + Tags (right tile)
-//          y=30, h=44, gap=4 between tiles
-//          Left  tile: x=10, w=88
-//          Right tile: x=102, w=88
+// Row A  — Notes (left) + Tags (right) — tall portrait tiles
+//          y=30, h=50
+//          Left:  x=8,  w=90
+//          Right: x=102, w=90
 //
-// Row B/C/D — Sync / Settings / USB Drive  (full-width cards)
-//          x=10, w=180, h=28, spacing: y=80, 113, 146
-//          Total bottom edge: 146+28 = 174px  (safe)
+// Row B  — 2×2 icon tile grid (Sync | Settings | USB | Tamagotchi)
+//          Tile size: w=88, h=48, gap=4
+//          Left column:  x=8
+//          Right column: x=104
+//          Top row y=86,  bottom row y=138
+//          Bottom edge:  138+48 = 186 px  (4 px margin to 190; safe)
+//
+// Touch hit-zones mirror these coordinates exactly (see handleTouch in .ino).
+//   cursor 0 = Notes   tile  (8,  30, 90, 50)
+//   cursor 1 = Tags    tile  (102,30, 90, 50)
+//   cursor 2 = Sync    tile  (8,  86, 88, 48)
+//   cursor 3 = Settings tile (104,86, 88, 48)
+//   cursor 4 = USB     tile  (8,  138,88, 48)
+//   cursor 5 = Tamagotchi    (104,138,88, 48)
 
 void showMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "menu", 1, BLACK);
   hline(16, 26, W-32, BLACK);
 
-  // ── Row A: Notes (0) + Tags (1) side by side ──
-  const int tileY = 30, tileH = 44;
-  const int tileL_x = 10,  tileL_w = 88;   // left  tile
-  const int tileR_x = 102, tileR_w = 88;   // right tile
+  // ── Row A: Notes (0) + Tags (1) ──────────────────────────────────────
+  const int tileAy = 30, tileAh = 50;
+  const int tileL_x = 8,   tileL_w = 90;
+  const int tileR_x = 102, tileR_w = 90;
 
   // Notes tile
   {
     bool active = (cursor == 0);
-    if (active) fillRoundRect(tileL_x, tileY, tileL_w, tileH, 10, BLACK);
-    else        strokeRoundRect(tileL_x, tileY, tileL_w, tileH, 10, 1, BLACK);
+    if (active) fillRoundRect(tileL_x, tileAy, tileL_w, tileAh, 10, BLACK);
+    else        strokeRoundRect(tileL_x, tileAy, tileL_w, tileAh, 10, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
-    drawMinimalDocIcon(tileL_x + tileL_w/2, tileY + 16, col);
-    drawStrInBox(tileL_x + 2, tileY + tileH - 16, tileL_w - 4, 14, "Notes", 1, col);
+    drawMinimalDocIcon(tileL_x + tileL_w/2, tileAy + 18, col);
+    drawStrInBox(tileL_x + 2, tileAy + tileAh - 16, tileL_w - 4, 14, "Notes", 1, col);
   }
 
   // Tags tile
   {
     bool active = (cursor == 1);
-    if (active) fillRoundRect(tileR_x, tileY, tileR_w, tileH, 10, BLACK);
-    else        strokeRoundRect(tileR_x, tileY, tileR_w, tileH, 10, 1, BLACK);
+    if (active) fillRoundRect(tileR_x, tileAy, tileR_w, tileAh, 10, BLACK);
+    else        strokeRoundRect(tileR_x, tileAy, tileR_w, tileAh, 10, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
-    drawMinimalTagIcon(tileR_x + tileR_w/2, tileY + 16, col);
-    drawStrInBox(tileR_x + 2, tileY + tileH - 16, tileR_w - 4, 14, "Tags", 1, col);
+    drawMinimalTagIcon(tileR_x + tileR_w/2, tileAy + 18, col);
+    drawStrInBox(tileR_x + 2, tileAy + tileAh - 16, tileR_w - 4, 14, "Tags", 1, col);
   }
 
-  // ── Rows B/C/D: Sync (2), Settings (3), USB Drive (4) ──
-  const int rowX = 10, rowW = 180, rowH = 28;
-  const int rowY[3] = { 80, 113, 146 };
-  const char* rowLabels[3] = { "Sync", "Settings", "USB Drive" };
+  // ── Row B: 2×2 icon tile grid ─────────────────────────────────────────
+  //   [2] Sync      [3] Settings
+  //   [4] USB       [5] Tamagotchi
+  const int gridTileW = 88, gridTileH = 48, gridR = 8;
+  const int gridLx = 8, gridRx = 104;
+  const int gridTy = 86, gridBy = 138;        // top-row y, bottom-row y
+  const int iconOffY = 16;                    // icon centre relative to tile top
+  const int lblH    = 13;                     // label box height at tile bottom
 
-  for (int i = 0; i < 3; i++) {
-    int menuIdx = 2 + i;
-    bool active = (cursor == menuIdx);
-    int y = rowY[i];
-    if (active) fillRoundRect(rowX, y, rowW, rowH, 8, BLACK);
-    else        strokeRoundRect(rowX, y, rowW, rowH, 8, 1, BLACK);
+  struct { int x; int y; int idx; const char* label; } tiles[4] = {
+    { gridLx, gridTy,  2, "Sync"       },
+    { gridRx, gridTy,  3, "Settings"   },
+    { gridLx, gridBy,  4, "USB"        },
+    { gridRx, gridBy,  5, "Tamagotchi" },
+  };
+
+  for (int t = 0; t < 4; t++) {
+    int x = tiles[t].x, y = tiles[t].y, mi = tiles[t].idx;
+    bool active = (cursor == mi);
+    if (active) fillRoundRect(x, y, gridTileW, gridTileH, gridR, BLACK);
+    else        strokeRoundRect(x, y, gridTileW, gridTileH, gridR, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
-    drawStrInBox(rowX, y, rowW, rowH, rowLabels[i], 1, col);
+    int icx = x + gridTileW / 2;
+    int icy = y + iconOffY;
+    switch (mi) {
+      case 2: iconSyncSmall(icx, icy, col); break;
+      case 3: iconGear(icx, icy, col);      break;
+      case 4: iconUsbPlug(icx, icy, col);   break;
+      case 5: iconCatFace(icx, icy, col);   break;
+    }
+    drawStrInBox(x + 2, y + gridTileH - lblH - 2, gridTileW - 4, lblH, tiles[t].label, 1, col);
   }
 
   refresh();
@@ -700,15 +765,6 @@ void showTransferMode(const char* ip) {
 }
 
 // ─── Settings screen ──────────────────────────────────────────────────────────
-//
-// Row layout (y0=38, step=26, boxH=22) fits 6 rows cleanly in 200px:
-//   Row 0  y=38   Sounds      (on/off)
-//   Row 1  y=64   Transfer
-//   Row 2  y=90   Device
-//   Row 3  y=116  Erase All
-//   Row 4  y=142  Reset
-//   Row 5  y=168  idle rec    (on/off)
-//
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
@@ -732,7 +788,6 @@ void showSettings(int cursor) {
     } else if (row == 4) {
       drawStr(28, y + 6, "reset", 1, col);
     } else {
-      // row == 5: idle touch → record
       drawStr(28, y + 6, "idle rec", 1, col);
       drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
     }
@@ -820,6 +875,20 @@ void showUsbMsc() {
   refresh();
 }
 
+// ─── Tamagotchi placeholder screen ────────────────────────────────────────────
+//
+// showTamagotchi() is a stub — the pet logic lives in its own module.
+// This screen is shown when the menu tile is tapped and the Tamagotchi
+// module has not yet been initialised for this session.
+void showTamagotchi() {
+  clearWhite();
+  drawStr(16, 14, "tamagotchi", 1, BLACK);
+  hline(16, 26, W-32, BLACK);
+  iconCatFace(100, 88, BLACK);
+  drawStrC(100, 118, "coming soon", 1, BLACK);
+  refresh();
+}
+
 void redrawCurrentScreen() {
   switch (state) {
     case STATE_MENU:        showMenu(menuCursor);         break;
@@ -829,6 +898,7 @@ void redrawCurrentScreen() {
     case STATE_TAG_SELECT:  showTagSelect(tagCursor);     break;
     case STATE_NOTE_DETAIL: showNoteDetail(listCursor);   break;
     case STATE_USB_MSC:     showUsbMsc();                 break;
+    case STATE_TAMAGOTCHI:  showTamagotchi();             break;
     default: break;
   }
 }
