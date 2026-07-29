@@ -77,7 +77,7 @@ void checkBatteryWarning() {
     batLowWarned          = true;
     batWarnActive         = true;
     batWarnShowUntilMs    = now + BAT_WARN_DURATION_MS;
-    showBatteryWarning(pct);
+    showBatteryLow(pct);
   } else if (batLowWarned && pct >= BAT_RECOVER_THRESHOLD) {
     // Recovered — allow the warning to fire again next time it drops.
     batLowWarned = false;

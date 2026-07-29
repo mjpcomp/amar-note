@@ -11,10 +11,11 @@ static bool batAdcReady = false;
 void batteryInit() {
   if (batAdcReady) return;
   pinMode(BAT_ADC_PIN, INPUT);
-  // ADC_ATTEN_DB_12 (formerly ADC_11db) → 0–3.9 V range, correct for the
-  // resistor-divided LiPo rail on this board.  Name changed in ESP-IDF 5.x;
-  // the Arduino-ESP32 3.x SDK already uses the new name.
-  analogSetPinAttenuation(BAT_ADC_PIN, ADC_ATTEN_DB_12);
+  // ADC_ATTENDB_MAX (= 12 dB attenuation) → 0–3.9 V range, correct for the
+  // resistor-divided LiPo rail on this board.
+  // ADC_ATTEN_DB_12 was the old name; it was renamed to ADC_ATTENDB_MAX in
+  // ESP-IDF 5.x (Arduino-ESP32 3.x SDK).
+  analogSetPinAttenuation(BAT_ADC_PIN, ADC_ATTENDB_MAX);
   analogReadMilliVolts(BAT_ADC_PIN);
   batAdcReady = true;
 }

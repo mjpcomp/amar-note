@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// Icons
+// Icons (public — used by screens outside ui.cpp)
 void iconMicWhite(int cx, int cy);
 void iconRecordBig(int cx, int cy);
 void iconCheck(int cx, int cy, bool filled);
@@ -11,7 +11,8 @@ void iconTag(int cx, int cy);
 void iconSync(int cx, int cy);
 void iconWifi(int cx, int cy);
 void iconNoteLines(int cx, int cy);
-void iconCatFace(int cx, int cy, uint8_t col);  // cute cat face (Tamagotchi tile)
+// Note: iconCatFace / iconGear / iconUsbPlug / iconSyncSmall are static
+// helpers used only inside ui.cpp and are NOT declared here.
 
 // Layout helpers
 void drawHeader(const char* title, const char* rightInfo = nullptr);
