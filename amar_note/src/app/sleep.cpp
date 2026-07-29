@@ -4,6 +4,7 @@
 #include "../../types.h"
 #include "sleep.h"
 #include "ui.h"
+#include "battery.h"
 #include "network.h"
 #include "../../sounds.h"
 #include "WiFi.h"
@@ -43,4 +44,55 @@ void enterUltraSleep() {
 
   delay(50);
   esp_deep_sleep_start();
+}
+
+// ─── checkBatteryWarning ──────────────────────────────────────────────────────
+//
+// Sampled every BAT_CHECK_INTERVAL_MS.  Shows a low-battery overlay for
+// 4 seconds when the level first drops below BAT_LOW_THRESHOLD (%), then
+// stays silent until it recovers above BAT_RECOVER_THRESHOLD (hysteresis).
+//
+// Must only be called from STATE_IDLE (overlay draw assumes idle screen is
+// already showing behind it).
+//
+#define BAT_WARN_DURATION_MS  4000UL
+
+void checkBatteryWarning() {
+  uint32_t now = millis();
+
+  // Dismiss an active overlay once its display window expires.
+  if (batWarnActive && now >= batWarnShowUntilMs) {
+    batWarnActive = false;
+    showIdle();   // redraw clean idle screen
+  }
+
+  // Throttle ADC reads.
+  if (now - lastBatCheckMs < BAT_CHECK_INTERVAL_MS) return;
+  lastBatCheckMs = now;
+
+  int pct = readBatteryPercent();
+  if (pct < 0) return;   // ADC not ready / no battery
+
+  if (!batLowWarned && pct <= BAT_LOW_THRESHOLD) {
+    batLowWarned          = true;
+    batWarnActive         = true;
+    batWarnShowUntilMs    = now + BAT_WARN_DURATION_MS;
+    showBatteryWarning(pct);
+  } else if (batLowWarned && pct >= BAT_RECOVER_THRESHOLD) {
+    // Recovered — allow the warning to fire again next time it drops.
+    batLowWarned = false;
+  }
+}
+
+// ─── checkAutoSleep ───────────────────────────────────────────────────────────
+//
+// Puts the device into ultra-sleep after ULTRA_SLEEP_MS of inactivity.
+// Guards: active transfer server or active recording suppress sleep.
+//
+void checkAutoSleep() {
+  if (transferServerActive) return;
+  if (state == STATE_RECORDING) return;
+  if (millis() - lastActivityMs >= ULTRA_SLEEP_MS) {
+    enterUltraSleep();
+  }
 }

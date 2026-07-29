@@ -53,3 +53,18 @@ ButtonEvent readButtonEvent(int pin) {
   }
   return EV_NONE;
 }
+
+// pollButton() — called once per loop() tick.
+//
+// For BTN_PWR (isPwr=true) an EV_LONG means the user held the power button;
+// we immediately cut the power-hold latch so the board shuts off, exactly as
+// the old inline loop() did before the refactor.
+ButtonEvent pollButton(int pin, bool isPwr) {
+  ButtonEvent ev = readButtonEvent(pin);
+  if (isPwr && ev == EV_LONG) {
+    // Hard power-off: release the battery-hold latch and let the board die.
+    pinMode(PWR_HOLD_PIN, OUTPUT);
+    digitalWrite(PWR_HOLD_PIN, LOW);
+  }
+  return ev;
+}
