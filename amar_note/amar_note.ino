@@ -46,6 +46,7 @@ extern "C" {
 #include "src/app/obsidian.h"
 #include "src/app/usb_msc.h"
 #include "src/app/touch.h"
+#include "src/app/pet.h"
 
 // All pin, timing, path and threshold constants live in config.h.
 
@@ -393,7 +394,8 @@ void handleSerialConfig() {
 //   STATE_NOTE_DETAIL top area     → play; mid = scroll/next; bottom strip = back
 //   STATE_DELETE_CONFIRM halves    → confirm (left) / cancel (right)
 //   STATE_TRANSFER   anywhere      → exit transfer mode
-//   STATE_TAMAGOTCHI anywhere      → back to menu
+//   STATE_TAMAGOTCHI top strip     → back (stats→main or main→menu)
+//                    action pills  → Feed/Play/Pet/Stats by index
 //
 static bool handleTouch() {
   if (state == STATE_RECORDING || state == STATE_USB_MSC) return false;
@@ -455,7 +457,7 @@ static bool handleTouch() {
     if (touchHitTest(tx, ty, 104, 138, 88, 48)) {         // Tamagotchi
       soundSelect();
       state = STATE_TAMAGOTCHI;
-      showTamagotchi();
+      petEnter();
       return true;
     }
     return false;
@@ -697,12 +699,24 @@ static bool handleTouch() {
   }
 
   // ── TAMAGOTCHI ───────────────────────────────────────────────────────────
-  // Any tap returns to the menu (stub screen has no sub-interactions yet).
+  // Top strip (ty < 22): back — exits stats→main or main→menu.
+  // Action pills: Feed (0), Play (1), Pet (2), Stats (3).
+  // Hit-zones mirror petDrawActionBar() at PET_BAR_Y (178), pill layout is
+  // computed dynamically, but we use fixed approximate zones here that cover
+  // each quarter of the bar width.
   if (state == STATE_TAMAGOTCHI) {
-    soundBack();
-    state = STATE_MENU;
-    showMenu(menuCursor);
-    return true;
+    if (ty < 22) {
+      petTouchBack();
+      return true;
+    }
+    if (ty >= PET_BAR_Y) {
+      // Divide the bar into 4 equal zones across the 200px width.
+      int zone = (int)(tx / 50);   // 0..3
+      if (zone > 3) zone = 3;
+      petTouchAction(zone);
+      return true;
+    }
+    return false;
   }
 
   return false;
@@ -774,7 +788,7 @@ void loop() {
         case 2: startSyncFlow(); break;
         case 3: settingsCursor = 0; state = STATE_SETTINGS; showSettings(settingsCursor); break;
         case 4: enterMscMode(); break;
-        case 5: state = STATE_TAMAGOTCHI; showTamagotchi(); break;
+        case 5: state = STATE_TAMAGOTCHI; petEnter(); break;
       }
     }
     return;
@@ -954,10 +968,7 @@ void loop() {
   }
 
   if (state == STATE_TAMAGOTCHI) {
-    if (recEv == EV_SINGLE || recEv == EV_LONG || pwrEv == EV_SINGLE) {
-      soundBack();
-      state = STATE_MENU; showMenu(menuCursor);
-    }
+    petLoop();
     return;
   }
 
