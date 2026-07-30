@@ -853,6 +853,11 @@ void loop() {
     return;
   }
 
+  // STATE_NOTE_DETAIL:
+  //   REC tap  → play back audio
+  //   PWR tap  → scroll to next page / back to list when on last page
+  //   PWR long → enter delete confirm  (README: "Long-hold power while viewing a note")
+  //   REC long → back to note list     (README: "Back = Long-hold record")
   if (state == STATE_NOTE_DETAIL) {
     if (recEv == EV_SINGLE) {
       int idx = noteAtFilteredIndex(listCursor);
@@ -864,7 +869,7 @@ void loop() {
         showNoteDetail(listCursor);
       }
     }
-    if (recEv == EV_LONG) {
+    if (pwrEv == EV_LONG) {
       state = STATE_DELETE_CONFIRM;
       int idx = noteAtFilteredIndex(listCursor);
       if (idx >= 0) showDeleteConfirm(noteIndex[idx].num);
@@ -880,7 +885,7 @@ void loop() {
         state = STATE_NOTE_LIST; showNoteList(listCursor);
       }
     }
-    if (pwrEv == EV_LONG) {
+    if (recEv == EV_LONG) {
       state = STATE_NOTE_LIST; showNoteList(listCursor);
     }
     return;
