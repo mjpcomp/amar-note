@@ -740,26 +740,34 @@ void loop() {
     return;
   }
 
+  // STATE_SAVED / STATE_TAG_SELECT:
+  //   PWR tap  → scroll tag cursor
+  //   REC tap  → confirm tag and sleep
+  //   REC long → sleep without tag change
   if (state == STATE_SAVED || state == STATE_TAG_SELECT) {
+    if (pwrEv == EV_SINGLE) {
+      tagCursor = (tagCursor + 1) % max(tagCount, 1);
+      showTagSelect(tagCursor);
+    }
     if (recEv == EV_SINGLE) {
       saveTag(lastRecNum, tags[constrain(tagCursor, 0, tagCount - 1)]);
       enterUltraSleep();
     }
     if (recEv == EV_LONG) enterUltraSleep();
-    if (pwrEv == EV_SINGLE) {
-      tagCursor = (tagCursor + 1) % max(tagCount, 1);
-      showTagSelect(tagCursor);
-    }
     return;
   }
 
+  // STATE_MENU:
+  //   PWR tap  → scroll menu cursor
+  //   REC tap  → select highlighted item
+  //   REC long → sleep
   if (state == STATE_MENU) {
-    if (recEv == EV_SINGLE) {
+    if (pwrEv == EV_SINGLE) {
       menuCursor = (menuCursor + 1) % MENU_COUNT;
       showMenu(menuCursor);
     }
     if (recEv == EV_LONG) enterUltraSleep();
-    if (pwrEv == EV_SINGLE) {
+    if (recEv == EV_SINGLE) {
       switch (menuCursor) {
         case 0: activeFilter = -1; listCursor = 0; state = STATE_NOTE_LIST; showNoteList(listCursor); break;
         case 1: tagCursor = 0; state = STATE_TAG_BROWSER; showTagBrowser(tagCursor); break;
@@ -772,15 +780,19 @@ void loop() {
     return;
   }
 
+  // STATE_SETTINGS:
+  //   PWR tap  → scroll settings cursor
+  //   REC tap  → activate highlighted setting
+  //   REC long → back to menu
   if (state == STATE_SETTINGS) {
-    if (recEv == EV_SINGLE) {
+    if (pwrEv == EV_SINGLE) {
       settingsCursor = (settingsCursor + 1) % SETTINGS_COUNT;
       showSettings(settingsCursor);
     }
     if (recEv == EV_LONG) {
       state = STATE_MENU; showMenu(menuCursor);
     }
-    if (pwrEv == EV_SINGLE) {
+    if (recEv == EV_SINGLE) {
       if (settingsCursor == 0) {
         amarSoundSetEnabled(!amarSoundIsEnabled());
         showSettings(settingsCursor);
@@ -802,23 +814,31 @@ void loop() {
     return;
   }
 
+  // STATE_TAG_BROWSER:
+  //   PWR tap  → scroll tags
+  //   REC tap  → select tag / open note list
+  //   REC/PWR long → back to menu
   if (state == STATE_TAG_BROWSER) {
-    if (recEv == EV_SINGLE) {
+    if (pwrEv == EV_SINGLE) {
       tagCursor = (tagCursor + 1) % max(tagCount, 1);
       showTagBrowser(tagCursor);
     }
     if (recEv == EV_LONG || pwrEv == EV_LONG) {
       state = STATE_MENU; showMenu(menuCursor);
     }
-    if (pwrEv == EV_SINGLE) {
+    if (recEv == EV_SINGLE) {
       activeFilter = tagCursor; listCursor = 0;
       state = STATE_NOTE_LIST; showNoteList(listCursor);
     }
     return;
   }
 
+  // STATE_NOTE_LIST:
+  //   PWR tap  → scroll note cursor
+  //   REC tap  → open highlighted note detail
+  //   REC/PWR long → back to menu
   if (state == STATE_NOTE_LIST) {
-    if (recEv == EV_SINGLE) {
+    if (pwrEv == EV_SINGLE) {
       int count = filteredCount();
       if (count > 0) listCursor = (listCursor + 1) % count;
       showNoteList(listCursor);
@@ -826,7 +846,7 @@ void loop() {
     if (recEv == EV_LONG || pwrEv == EV_LONG) {
       state = STATE_MENU; showMenu(menuCursor);
     }
-    if (pwrEv == EV_SINGLE) {
+    if (recEv == EV_SINGLE) {
       detailScrollPage = 0;
       state = STATE_NOTE_DETAIL; showNoteDetail(listCursor);
     }
@@ -909,14 +929,14 @@ void loop() {
   }
 
   if (state == STATE_DELETE_ALL_CONFIRM) {
-    if (recEv == EV_SINGLE) {
+    if (pwrEv == EV_SINGLE) {
       eraseAllCursor = (eraseAllCursor + 1) % 2;
       showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
     }
     if (recEv == EV_LONG) {
       state = STATE_SETTINGS; showSettings(settingsCursor);
     }
-    if (pwrEv == EV_SINGLE) {
+    if (recEv == EV_SINGLE) {
       bool alsoVault = (eraseAllCursor == 1);
       deleteAllNotes(alsoVault);
       activeFilter = -1; listCursor = 0;
@@ -935,4 +955,7 @@ void loop() {
     }
     return;
   }
+
+  // ── Auto-sleep: fires from any non-recording, non-transfer state ──────────
+  checkAutoSleep();
 }
