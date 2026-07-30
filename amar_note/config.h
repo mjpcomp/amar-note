@@ -109,4 +109,35 @@
 #define FIRMWARE_VERSION  "v1.0"
 #define FW_VERSION        FIRMWARE_VERSION
 
+/* ── Nekogotchi (virtual pet) ─────────────────────────────────────────────── */
+/* SD save file */
+#define PET_FILE            "/pet.dat"
+/* Starting stats (0-100) */
+#define PET_START_HUNGER    85
+#define PET_START_HAPPY     85
+#define PET_START_ENERGY    90
+/* Hourly decay / recovery rates */
+#define PET_DECAY_HUNGER_PH  3
+#define PET_DECAY_HAPPY_PH   2
+#define PET_RECOVER_ENERGY_PH 8
+/* Action deltas */
+#define PET_FEED_HUNGER     50
+#define PET_PLAY_HAPPY      20
+#define PET_PLAY_ENERGY     15
+#define PET_PET_HAPPY       10
+/* Max offline hours applied at once (prevents instant death after long sleep) */
+#define PET_ELAPSED_CAP_H   48
+/* Millis an action-pose sprite is shown before returning to main view */
+#define PET_ACTION_MS       1400
+/* Mood thresholds */
+#define PET_TH_HUNGRY       30
+#define PET_TH_SLEEP_ENERGY 20
+#define PET_TH_SAD          15
+#define PET_TH_HAPPY        70
+/* Sprite position on screen */
+#define PET_SPRITE_X        25
+#define PET_SPRITE_Y        26
+/* Action-bar Y position */
+#define PET_BAR_Y           178
+
 #endif // CONFIG_H
