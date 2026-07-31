@@ -727,6 +727,14 @@ void loop() {
   handleSerialConfig();
   serviceDisplay();
 
+  // STATE_TAMAGOTCHI must be dispatched before the shared pollButton() calls
+  // below, otherwise petLoop()'s own pollButton() calls always see EV_NONE
+  // because the events have already been consumed here.
+  if (state == STATE_TAMAGOTCHI) {
+    if (!handleTouch()) petLoop();
+    return;
+  }
+
   if (handleTouch()) return;
 
   if (transferServerActive) {
@@ -964,11 +972,6 @@ void loop() {
       menuCursor = 0;
       state = STATE_MENU; showMenu(menuCursor);
     }
-    return;
-  }
-
-  if (state == STATE_TAMAGOTCHI) {
-    petLoop();
     return;
   }
 
