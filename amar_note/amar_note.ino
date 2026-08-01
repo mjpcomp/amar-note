@@ -67,6 +67,7 @@ int      tagCursor      = 2;
 int      menuCursor     = 0;
 int      settingsCursor = 0;
 int      eraseAllCursor = 0;
+int      resetMenuCursor = 0;
 int      activeFilter   = -1;
 int      lastRecNum     = -1;
 
@@ -394,6 +395,8 @@ void handleSerialConfig() {
 //   STATE_NOTE_DETAIL top area     → play; mid = scroll/next; bottom strip = back
 //   STATE_DELETE_CONFIRM halves    → confirm (left) / cancel (right)
 //   STATE_TRANSFER   anywhere      → exit transfer mode
+//   STATE_RESET_MENU pills         → select reset option
+//   STATE_RESET_WIFI_CONFIRM halves → confirm (left) / cancel (right)
 //   STATE_TAMAGOTCHI top strip     → back (stats→main or main→menu)
 //                    action pills  → Feed/Play/Pet/Stats by index
 //
@@ -493,8 +496,10 @@ static bool handleTouch() {
           cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
           showSettings(settingsCursor);
         } else {
-          state = STATE_RESET_CONFIRM;
-          showResetConfirm();
+          // Reset → open the granular reset menu
+          resetMenuCursor = 0;
+          state = STATE_RESET_MENU;
+          showResetMenu(resetMenuCursor);
         }
         return true;
       }
@@ -632,6 +637,48 @@ static bool handleTouch() {
     return true;
   }
 
+  // ── RESET MENU ────────────────────────────────────────────────────────────
+  // Pills: y0=52, step=36, h=28, x=20, w=160
+  if (state == STATE_RESET_MENU) {
+    const int y0 = 52, step = 36, h = 28;
+    for (int i = 0; i < 3; i++) {
+      if (touchHitTest(tx, ty, 20, y0 + i * step, 160, h)) {
+        soundSelect();
+        if (i == 0) {
+          state = STATE_RESET_WIFI_CONFIRM;
+          showResetWifiConfirm();
+        } else if (i == 1) {
+          cfg::resetKeys(); soundDelete();
+          showResetDone(); delay(1400); ESP.restart();
+        } else {
+          state = STATE_RESET_CONFIRM;
+          showResetConfirm();
+        }
+        return true;
+      }
+    }
+    if (ty >= 180) {
+      soundBack();
+      state = STATE_SETTINGS;
+      showSettings(settingsCursor);
+      return true;
+    }
+    return false;
+  }
+
+  // ── RESET WIFI CONFIRM ────────────────────────────────────────────────────
+  if (state == STATE_RESET_WIFI_CONFIRM) {
+    if (tx < 100) {
+      cfg::resetWifi(); soundDelete();
+      showResetDone(); delay(1400); ESP.restart();
+    } else {
+      soundBack();
+      state = STATE_RESET_MENU;
+      showResetMenu(resetMenuCursor);
+    }
+    return true;
+  }
+
   // ── RESET CONFIRM ─────────────────────────────────────────────────────────
   if (state == STATE_RESET_CONFIRM) {
     if (tx < 100) {
@@ -642,8 +689,8 @@ static bool handleTouch() {
       ESP.restart();
     } else {
       soundBack();
-      state = STATE_SETTINGS;
-      showSettings(settingsCursor);
+      state = STATE_RESET_MENU;
+      showResetMenu(resetMenuCursor);
     }
     return true;
   }
@@ -830,7 +877,10 @@ void loop() {
         cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
         showSettings(settingsCursor);
       } else {
-        state = STATE_RESET_CONFIRM; showResetConfirm();
+        // Reset → open the granular reset menu
+        resetMenuCursor = 0;
+        state = STATE_RESET_MENU;
+        showResetMenu(resetMenuCursor);
       }
     }
     return;
@@ -936,6 +986,47 @@ void loop() {
     return;
   }
 
+  // STATE_RESET_MENU:
+  //   PWR tap  → scroll option cursor
+  //   REC tap  → select option
+  //   PWR long → back to settings
+  if (state == STATE_RESET_MENU) {
+    if (pwrEv == EV_SINGLE) {
+      resetMenuCursor = (resetMenuCursor + 1) % 3;
+      showResetMenu(resetMenuCursor);
+    }
+    if (pwrEv == EV_LONG) {
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    if (recEv == EV_SINGLE) {
+      if (resetMenuCursor == 0) {
+        state = STATE_RESET_WIFI_CONFIRM;
+        showResetWifiConfirm();
+      } else if (resetMenuCursor == 1) {
+        cfg::resetKeys(); soundDelete();
+        showResetDone(); delay(1400); ESP.restart();
+      } else {
+        state = STATE_RESET_CONFIRM;
+        showResetConfirm();
+      }
+    }
+    return;
+  }
+
+  // STATE_RESET_WIFI_CONFIRM:
+  //   REC tap  → reset WiFi credentials + restart
+  //   PWR tap  → back to reset menu
+  if (state == STATE_RESET_WIFI_CONFIRM) {
+    if (recEv == EV_SINGLE) {
+      cfg::resetWifi(); soundDelete();
+      showResetDone(); delay(1400); ESP.restart();
+    }
+    if (pwrEv == EV_SINGLE) {
+      state = STATE_RESET_MENU; showResetMenu(resetMenuCursor);
+    }
+    return;
+  }
+
   if (state == STATE_RESET_CONFIRM) {
     if (recEv == EV_SINGLE) {
       cfg::factoryReset(); soundDelete();
@@ -943,7 +1034,7 @@ void loop() {
       ESP.restart();
     }
     if (pwrEv == EV_SINGLE) {
-      state = STATE_SETTINGS; showSettings(settingsCursor);
+      state = STATE_RESET_MENU; showResetMenu(resetMenuCursor);
     }
     return;
   }
