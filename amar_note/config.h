@@ -57,12 +57,13 @@
 #define SD_D0   40
 
 /* Audio */
-#define SAMPLE_RATE  16000
-#define REC_BUF      (8 * 1024)
-#define MAX_REC_MS   (5UL * 60UL * 1000UL)   // hard cap on a single recording (5 min)
-#define REC_RING_LEN (96 * 1024)             // PSRAM ring to absorb SD write stalls
-#define MIC_GAIN_DB  45.0f                   // ES7210 input gain
-#define SPK_VOL_MAX  100.0f                  // ES8311 output volume ceiling
+#define SAMPLE_RATE      16000
+#define REC_BUF          (8 * 1024)
+#define MAX_REC_MS       (5UL * 60UL * 1000UL)   // hard cap on a single recording (5 min)
+#define REC_RING_LEN     (96 * 1024)              // PSRAM ring to absorb SD write stalls
+#define MIC_GAIN_DB      45.0f                    // ES7210 input gain
+#define SPK_VOL_MAX      100.0f                   // ES8311 output volume ceiling
+#define MIN_NOTE_SECONDS 1                        // recordings shorter than this are discarded
 
 /* Storage paths */
 #define NOTES_DIR  "/notes"

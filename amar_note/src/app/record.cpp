@@ -21,6 +21,10 @@ extern "C" {
 // The producer task and the consumer drain loop both observe this.
 volatile bool g_stopRecording = false;
 
+// Set true when record() discards a note for being under MIN_NOTE_SECONDS.
+// Cleared at the start of every record() call so stale state never lingers.
+bool g_lastRecTooShort = false;
+
 // Amar Note — audio capture (producer) and SD-write (consumer) run on separate
 // cores connected by a PSRAM ring buffer. The producer keeps draining the I2S
 // DMA at line rate so a slow SD write only grows the ring instead of dropping samples.
@@ -51,6 +55,8 @@ static void recProducerTask(void* arg) {
 }
 
 bool record() {
+  g_lastRecTooShort = false;   // clear stale state from any previous call
+
   int num = nextNoteNumber();
   char path[64]; snprintf(path, sizeof(path), "%s/note_%03d.wav", NOTES_DIR, num);
   Serial.printf("[Rec] %s\n", path);
@@ -126,6 +132,19 @@ bool record() {
   while (drain(0)) {}
 
   vRingbufferDeleteWithCaps(ctx.ring);
+
+  // Discard accidental taps — notes shorter than MIN_NOTE_SECONDS are deleted
+  // from the card immediately. The file is already on disk at this point, so
+  // we close it, remove it, flag the caller, and return false.
+  const uint32_t minBytes = (uint32_t)MIN_NOTE_SECONDS * SAMPLE_RATE * 2;
+  if (totalMono < minBytes) {
+    f.close();
+    SD_MMC.remove(path);
+    g_lastRecTooShort = true;
+    Serial.printf("[Rec] discarded (too short): %lu bytes < %lu min\n",
+                  (unsigned long)totalMono, (unsigned long)minBytes);
+    return false;
+  }
 
   f.seek(0);
   uint32_t dB=totalMono, fS=dB+36, bR=SAMPLE_RATE*2;

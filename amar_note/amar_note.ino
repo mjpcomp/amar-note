@@ -118,7 +118,11 @@ void startRecordFlow() {
   amarSoundSetEnabled(true);
 
   if (!recOk) {
-    showError("REC FAIL");
+    if (g_lastRecTooShort) {
+      showError("TOO SHORT");
+    } else {
+      showError("REC FAIL");
+    }
     delay(1600);
     state = STATE_IDLE;
     showIdle();
