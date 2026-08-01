@@ -62,5 +62,7 @@ bool    idleTouchRecord();
 void    setIdleTouchRecord(bool on);
 
 void    factoryReset();
+void    resetWifi();   // erases ssid + pass only; leaves keys intact
+void    resetKeys();   // erases all API/service keys; leaves WiFi intact
 
 }  // namespace cfg

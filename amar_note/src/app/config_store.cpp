@@ -157,9 +157,27 @@ void setGithubAiEnrich(bool on) { prefs.putBool("ghai", on); }
 
 // ── Touch behaviour ──────────────────────────────────────────────────────────
 
-bool idleTouchRecord()         { return prefs.getBool("idlerec", false); }
+bool idleTouchRecord()           { return prefs.getBool("idlerec", false); }
 void setIdleTouchRecord(bool on) { prefs.putBool("idlerec", on); }
 
 void factoryReset() { prefs.clear(); }
+
+void resetWifi() {
+  prefs.remove("ssid");
+  prefs.remove("pass");
+}
+
+void resetKeys() {
+  prefs.remove("oaikey");
+  prefs.remove("groqkey");
+  prefs.remove("ghtok");
+  prefs.remove("ghrepo");
+  prefs.remove("ghbranch");
+  prefs.remove("ghdir");
+  prefs.remove("ghon");
+  prefs.remove("sttprov");
+  prefs.remove("enrichprov");
+  prefs.remove("enrichmdl");
+}
 
 }  // namespace cfg
