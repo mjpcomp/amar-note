@@ -162,8 +162,6 @@ static void iconUsbPlug(int cx, int cy, uint8_t col) {
 }
 
 // ── Menu tile icon: cute cat face (Tamagotchi) ───────────────────────────────
-//
-// Head circle + two pointy ears + two dot eyes + small W-mouth.
 static void iconCatFace(int cx, int cy, uint8_t col) {
   // Head
   strokeCircle(cx, cy+2, 13, 2, col);
@@ -392,30 +390,42 @@ void showBatteryLow(int pct) {
 }
 
 // ─── Recording screen: animated microphone with sound arcs ────────────────────────────────────
+//
+// White background, black mic + arcs — consistent with all other screens.
+// drawMicBody uses WHITE mask rects to clip geometry into the background;
+// drawSoundArcs similarly masks above/below the arc band with WHITE.
 static float recCircleR = 24.0f;
 
 static void drawMicBody(int cx, int micCy) {
-  fillRoundRect(cx - 11, micCy - 18, 22, 36, 10, WHITE);
-  fillCircle(cx, micCy - 18, 11, WHITE);
-  strokeCircle(cx, micCy, 22, 3, WHITE);
-  fillRect(cx - 26, micCy - 26, 52, 28, BLACK);
-  fillRect(cx - 1, micCy + 18, 3, 14, WHITE);
-  fillRect(cx - 15, micCy + 31, 30, 3, WHITE);
+  // Mic capsule body
+  fillRoundRect(cx - 11, micCy - 18, 22, 36, 10, BLACK);
+  fillCircle(cx, micCy - 18, 11, BLACK);
+  // Mic stand arc (lower half)
+  strokeCircle(cx, micCy, 22, 3, BLACK);
+  // Mask the upper half of the stand arc so only the lower C-shape shows.
+  // Must be WHITE (background colour) to act as a clip, not a solid block.
+  fillRect(cx - 26, micCy - 26, 52, 28, WHITE);
+  // Stand stem + base
+  fillRect(cx - 1, micCy + 18, 3, 14, BLACK);
+  fillRect(cx - 15, micCy + 31, 30, 3, BLACK);
 }
 
 static void drawSoundArcs(int cx, int micCy, int arcR) {
   if (arcR < 26) return;
-  strokeCircle(cx, micCy, arcR,      2, WHITE);
+  strokeCircle(cx, micCy, arcR,      2, BLACK);
   int inner = arcR - 12;
-  if (inner > 24) strokeCircle(cx, micCy, inner, 2, WHITE);
+  if (inner > 24) strokeCircle(cx, micCy, inner, 2, BLACK);
+  // Mask top and bottom of each arc circle so only the left/right wings show.
+  // WHITE fills erase into the white background — must NOT be BLACK.
   int maskH = arcR / 2 + 2;
-  fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, BLACK);
-  fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, BLACK);
+  fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, WHITE);
+  fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, WHITE);
 }
 
 static void drawRecordingScreen(uint32_t elapsedMs, int level) {
   (void)elapsedMs;
-  fillRect(0, 0, W, H, BLACK);
+  // White background — consistent with every other screen.
+  clearWhite();
   float target = 26.0f + (float)level * 42.0f / 152.0f;
   if (target < 26.0f) target = 26.0f;
   if (target > 68.0f) target = 68.0f;
@@ -469,35 +479,11 @@ void showTagSelect(int cursor) {
 }
 
 // ─── Menu layout ──────────────────────────────────────────────────────────────────────────────
-//
-// Screen is 200×200 px.  Available below header (y=0..27): 172 px.
-//
-// Row A  — Notes (left) + Tags (right) — tall portrait tiles
-//          y=30, h=50
-//          Left:  x=8,  w=90
-//          Right: x=102, w=90
-//
-// Row B  — 2×2 icon tile grid (Sync | Settings | USB | Tamagotchi)
-//          Tile size: w=88, h=48, gap=4
-//          Left column:  x=8
-//          Right column: x=104
-//          Top row y=86,  bottom row y=138
-//          Bottom edge:  138+48 = 186 px  (4 px margin to 190; safe)
-//
-// Touch hit-zones mirror these coordinates exactly (see handleTouch in .ino).
-//   cursor 0 = Notes   tile  (8,  30, 90, 50)
-//   cursor 1 = Tags    tile  (102,30, 90, 50)
-//   cursor 2 = Sync    tile  (8,  86, 88, 48)
-//   cursor 3 = Settings tile (104,86, 88, 48)
-//   cursor 4 = USB     tile  (8,  138,88, 48)
-//   cursor 5 = Tamagotchi    (104,138,88, 48)
-
 void showMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "menu", 1, BLACK);
   hline(16, 26, W-32, BLACK);
 
-  // ── Row A: Notes (0) + Tags (1) ──────────────────────────────────────
   const int tileAy = 30, tileAh = 50;
   const int tileL_x = 8,   tileL_w = 90;
   const int tileR_x = 102, tileR_w = 90;
@@ -522,14 +508,11 @@ void showMenu(int cursor) {
     drawStrInBox(tileR_x + 2, tileAy + tileAh - 16, tileR_w - 4, 14, "Tags", 1, col);
   }
 
-  // ── Row B: 2×2 icon tile grid ─────────────────────────────────────────
-  //   [2] Sync      [3] Settings
-  //   [4] USB       [5] Tamagotchi
   const int gridTileW = 88, gridTileH = 48, gridR = 8;
   const int gridLx = 8, gridRx = 104;
-  const int gridTy = 86, gridBy = 138;        // top-row y, bottom-row y
-  const int iconOffY = 16;                    // icon centre relative to tile top
-  const int lblH    = 13;                     // label box height at tile bottom
+  const int gridTy = 86, gridBy = 138;
+  const int iconOffY = 16;
+  const int lblH    = 13;
 
   struct { int x; int y; int idx; const char* label; } tiles[4] = {
     { gridLx, gridTy,  2, "Sync"       },
@@ -764,10 +747,6 @@ void showTransferMode(const char* ip) {
   refresh();
 }
 
-// ─── Settings screen ──────────────────────────────────────────────────────────
-//
-// Row order must match SETTINGS_ITEMS[] in amar_note.ino:
-//   0 Sounds   1 Transfer   2 Device   3 Erase All   4 idle rec   5 Reset
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
@@ -911,11 +890,6 @@ void showUsbMsc() {
   refresh();
 }
 
-// ─── Tamagotchi placeholder screen ────────────────────────────────────────────
-//
-// showTamagotchi() is a stub — the pet logic lives in its own module.
-// This screen is shown when the menu tile is tapped and the Tamagotchi
-// module has not yet been initialised for this session.
 void showTamagotchi() {
   clearWhite();
   drawStr(16, 14, "tamagotchi", 1, BLACK);
