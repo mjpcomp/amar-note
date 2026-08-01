@@ -374,32 +374,6 @@ void handleSerialConfig() {
 }
 
 // ─── Touch dispatch helper ──────────────────────────────────────────────────────────────────
-//
-// Called at the top of loop() before button handling.  Returns true if a touch
-// event was consumed (so the caller can skip button polling for this tick).
-//
-// Hit-zone geometry mirrors the layout constants in ui.cpp showMenu() exactly:
-//
-//   STATE_IDLE       (no action by default — see Settings → idle rec)
-//   STATE_MENU       Option-D hybrid 2×2 layout:
-//                      cursor 0  Notes      (8,  30, 90, 50)
-//                      cursor 1  Tags       (102,30, 90, 50)
-//                      cursor 2  Sync       (8,  86, 88, 48)
-//                      cursor 3  Settings   (104,86, 88, 48)
-//                      cursor 4  USB Drive  (8, 138, 88, 48)
-//                      cursor 5  Tamagotchi (104,138,88, 48)
-//   STATE_SETTINGS   rows          → select item
-//   STATE_TAG_SELECT pills         → select tag
-//   STATE_TAG_BROWSER big card     → drill into list; bottom strip = back
-//   STATE_NOTE_LIST  cards         → open detail; bottom strip = back
-//   STATE_NOTE_DETAIL top area     → play; mid = scroll/next; bottom strip = back
-//   STATE_DELETE_CONFIRM halves    → confirm (left) / cancel (right)
-//   STATE_TRANSFER   anywhere      → exit transfer mode
-//   STATE_RESET_MENU pills         → select reset option
-//   STATE_RESET_WIFI_CONFIRM halves → confirm (left) / cancel (right)
-//   STATE_TAMAGOTCHI top strip     → back (stats→main or main→menu)
-//                    action pills  → Feed/Play/Pet/Stats by index
-//
 static bool handleTouch() {
   if (state == STATE_RECORDING || state == STATE_USB_MSC) return false;
 
@@ -408,9 +382,6 @@ static bool handleTouch() {
 
   resetActivity();
 
-  // STATE_IDLE: guarded by runtime NVS setting.  Default = no-op so that an
-  // accidental brush of the screen cannot silently start a recording.
-  // Toggle via Settings → "idle rec" on the device.
   if (state == STATE_IDLE) {
     if (cfg::idleTouchRecord()) {
       startRecordFlow();
@@ -419,45 +390,39 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── MENU ──────────────────────────────────────────────────────────────────
-  // Row A tiles: Notes (x=8,y=30,w=90,h=50)  Tags (x=102,y=30,w=90,h=50)
-  // Row B 2x2:   Sync       (8,  86, 88, 48)
-  //              Settings   (104, 86, 88, 48)
-  //              USB Drive  (8,  138, 88, 48)
-  //              Tamagotchi (104,138, 88, 48)
   if (state == STATE_MENU) {
-    if (touchHitTest(tx, ty, 8,   30, 90, 50)) {          // Notes
+    if (touchHitTest(tx, ty, 8,   30, 90, 50)) {
       soundSelect();
       activeFilter = -1; listCursor = 0;
       state = STATE_NOTE_LIST;
       showNoteList(listCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 102, 30, 90, 50)) {          // Tags
+    if (touchHitTest(tx, ty, 102, 30, 90, 50)) {
       soundSelect();
       tagCursor = 0;
       state = STATE_TAG_BROWSER;
       showTagBrowser(tagCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 8,   86, 88, 48)) {          // Sync
+    if (touchHitTest(tx, ty, 8,   86, 88, 48)) {
       soundSelect();
       startSyncFlow();
       return true;
     }
-    if (touchHitTest(tx, ty, 104, 86, 88, 48)) {          // Settings
+    if (touchHitTest(tx, ty, 104, 86, 88, 48)) {
       soundSelect();
       settingsCursor = 0;
       state = STATE_SETTINGS;
       showSettings(settingsCursor);
       return true;
     }
-    if (touchHitTest(tx, ty, 8,   138, 88, 48)) {         // USB Drive
+    if (touchHitTest(tx, ty, 8,   138, 88, 48)) {
       soundSelect();
       enterMscMode();
       return true;
     }
-    if (touchHitTest(tx, ty, 104, 138, 88, 48)) {         // Tamagotchi
+    if (touchHitTest(tx, ty, 104, 138, 88, 48)) {
       soundSelect();
       state = STATE_TAMAGOTCHI;
       petEnter();
@@ -466,14 +431,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── SETTINGS ───────────────────────────────────────────────────────────
-  // Rows drawn by showSettings(): y0=38, step=26, boxH=22
-  //   i=0 y=38   Sounds
-  //   i=1 y=64   Transfer
-  //   i=2 y=90   Device
-  //   i=3 y=116  Erase All
-  //   i=4 y=142  idle rec
-  //   i=5 y=168  Reset
   if (state == STATE_SETTINGS) {
     const int rowY[6] = { 38, 64, 90, 116, 142, 168 };
     for (int i = 0; i < SETTINGS_COUNT; i++) {
@@ -496,7 +453,6 @@ static bool handleTouch() {
           cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
           showSettings(settingsCursor);
         } else {
-          // Reset → open the granular reset menu
           resetMenuCursor = 0;
           state = STATE_RESET_MENU;
           showResetMenu(resetMenuCursor);
@@ -513,7 +469,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── TAG SELECT (post-record) ───────────────────────────────────────────
   if (state == STATE_TAG_SELECT) {
     if (tagCount > 0) {
       const int x = 36, w = 128, h = 21, gap = 7, y0 = 40;
@@ -531,7 +486,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── TAG BROWSER ────────────────────────────────────────────────────────
   if (state == STATE_TAG_BROWSER) {
     if (touchHitTest(tx, ty, 28, 56, 144, 54)) {
       soundSelect();
@@ -555,7 +509,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── NOTE LIST ────────────────────────────────────────────────────────────
   if (state == STATE_NOTE_LIST) {
     int count = filteredCount();
     if (ty >= 180) {
@@ -584,7 +537,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── NOTE DETAIL ──────────────────────────────────────────────────────────
   if (state == STATE_NOTE_DETAIL) {
     if (ty >= 180) {
       soundBack();
@@ -620,7 +572,6 @@ static bool handleTouch() {
     }
   }
 
-  // ── DELETE CONFIRM ────────────────────────────────────────────────────────
   if (state == STATE_DELETE_CONFIRM) {
     if (tx < 100) {
       int idx = noteAtFilteredIndex(listCursor);
@@ -637,8 +588,7 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── RESET MENU ────────────────────────────────────────────────────────────
-  // Pills: y0=52, step=36, h=28, x=20, w=160
+  // ── RESET MENU: pills y0=52, step=36, h=28, x=20, w=160
   if (state == STATE_RESET_MENU) {
     const int y0 = 52, step = 36, h = 28;
     for (int i = 0; i < 3; i++) {
@@ -666,7 +616,7 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── RESET WIFI CONFIRM ────────────────────────────────────────────────────
+  // ── RESET WIFI CONFIRM: left half = confirm, right half = cancel
   if (state == STATE_RESET_WIFI_CONFIRM) {
     if (tx < 100) {
       cfg::resetWifi(); soundDelete();
@@ -679,7 +629,6 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── RESET CONFIRM ─────────────────────────────────────────────────────────
   if (state == STATE_RESET_CONFIRM) {
     if (tx < 100) {
       cfg::factoryReset();
@@ -695,7 +644,6 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── DELETE ALL CONFIRM ────────────────────────────────────────────────────
   if (state == STATE_DELETE_ALL_CONFIRM) {
     if (ty >= 180) {
       soundBack();
@@ -728,7 +676,6 @@ static bool handleTouch() {
     return false;
   }
 
-  // ── TRANSFER ─────────────────────────────────────────────────────────────
   if (state == STATE_TRANSFER) {
     soundBack();
     stopTransferMode();
@@ -737,7 +684,6 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── DEVICE INFO ──────────────────────────────────────────────────────────
   if (state == STATE_DEVICE_INFO) {
     soundBack();
     state = STATE_SETTINGS;
@@ -745,20 +691,13 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── TAMAGOTCHI ───────────────────────────────────────────────────────────
-  // Top strip (ty < 22): back — exits stats→main or main→menu.
-  // Action pills: Feed (0), Play (1), Pet (2), Stats (3).
-  // Hit-zones mirror petDrawActionBar() at PET_BAR_Y (178), pill layout is
-  // computed dynamically, but we use fixed approximate zones here that cover
-  // each quarter of the bar width.
   if (state == STATE_TAMAGOTCHI) {
     if (ty < 22) {
       petTouchBack();
       return true;
     }
     if (ty >= PET_BAR_Y) {
-      // Divide the bar into 4 equal zones across the 200px width.
-      int zone = (int)(tx / 50);   // 0..3
+      int zone = (int)(tx / 50);
       if (zone > 3) zone = 3;
       petTouchAction(zone);
       return true;
@@ -774,9 +713,8 @@ void loop() {
   handleSerialConfig();
   serviceDisplay();
 
-  // STATE_TAMAGOTCHI must be dispatched before the shared pollButton() calls
-  // below, otherwise petLoop()'s own pollButton() calls always see EV_NONE
-  // because the events have already been consumed here.
+  // STATE_TAMAGOTCHI is dispatched first so petLoop() gets its own
+  // pollButton() calls before the shared ones below consume the events.
   if (state == STATE_TAMAGOTCHI) {
     if (!handleTouch()) petLoop();
     return;
@@ -789,6 +727,13 @@ void loop() {
     if (captivePortalActive) dnsServer.processNextRequest();
   }
 
+  // ── Auto-sleep check ──────────────────────────────────────────────────────────
+  // Placed here — after handleTouch() and transfer server polling, but before
+  // state dispatch — so it runs every loop iteration for every state.
+  // checkAutoSleep() guards internally against STATE_RECORDING and
+  // transferServerActive, so no additional guard is needed here.
+  checkAutoSleep();
+
   ButtonEvent recEv = pollButton(BTN_REC, false);
   ButtonEvent pwrEv = pollButton(BTN_PWR, true);
 
@@ -800,7 +745,6 @@ void loop() {
       showMenu(menuCursor);
     }
     checkBatteryWarning();
-    checkAutoSleep();
     return;
   }
 
@@ -809,10 +753,6 @@ void loop() {
     return;
   }
 
-  // STATE_SAVED / STATE_TAG_SELECT:
-  //   PWR tap  → scroll tag cursor
-  //   REC tap  → confirm tag and sleep
-  //   REC long → sleep without tag change
   if (state == STATE_SAVED || state == STATE_TAG_SELECT) {
     if (pwrEv == EV_SINGLE) {
       tagCursor = (tagCursor + 1) % max(tagCount, 1);
@@ -826,10 +766,6 @@ void loop() {
     return;
   }
 
-  // STATE_MENU:
-  //   PWR tap  → scroll menu cursor
-  //   REC tap  → select highlighted item
-  //   REC long → sleep
   if (state == STATE_MENU) {
     if (pwrEv == EV_SINGLE) {
       menuCursor = (menuCursor + 1) % MENU_COUNT;
@@ -849,10 +785,6 @@ void loop() {
     return;
   }
 
-  // STATE_SETTINGS:
-  //   PWR tap  → scroll settings cursor
-  //   REC tap  → activate highlighted setting
-  //   REC long → back to menu
   if (state == STATE_SETTINGS) {
     if (pwrEv == EV_SINGLE) {
       settingsCursor = (settingsCursor + 1) % SETTINGS_COUNT;
@@ -877,7 +809,6 @@ void loop() {
         cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
         showSettings(settingsCursor);
       } else {
-        // Reset → open the granular reset menu
         resetMenuCursor = 0;
         state = STATE_RESET_MENU;
         showResetMenu(resetMenuCursor);
@@ -886,10 +817,6 @@ void loop() {
     return;
   }
 
-  // STATE_TAG_BROWSER:
-  //   PWR tap  → scroll tags
-  //   REC tap  → select tag / open note list
-  //   REC/PWR long → back to menu
   if (state == STATE_TAG_BROWSER) {
     if (pwrEv == EV_SINGLE) {
       tagCursor = (tagCursor + 1) % max(tagCount, 1);
@@ -905,10 +832,6 @@ void loop() {
     return;
   }
 
-  // STATE_NOTE_LIST:
-  //   PWR tap  → scroll note cursor
-  //   REC tap  → open highlighted note detail
-  //   REC/PWR long → back to menu
   if (state == STATE_NOTE_LIST) {
     if (pwrEv == EV_SINGLE) {
       int count = filteredCount();
@@ -925,11 +848,6 @@ void loop() {
     return;
   }
 
-  // STATE_NOTE_DETAIL:
-  //   REC tap  → play back audio
-  //   PWR tap  → scroll to next page / back to list when on last page
-  //   PWR long → enter delete confirm  (README: "Long-hold power while viewing a note")
-  //   REC long → back to note list     (README: "Back = Long-hold record")
   if (state == STATE_NOTE_DETAIL) {
     if (recEv == EV_SINGLE) {
       int idx = noteAtFilteredIndex(listCursor);
@@ -986,10 +904,6 @@ void loop() {
     return;
   }
 
-  // STATE_RESET_MENU:
-  //   PWR tap  → scroll option cursor
-  //   REC tap  → select option
-  //   PWR long → back to settings
   if (state == STATE_RESET_MENU) {
     if (pwrEv == EV_SINGLE) {
       resetMenuCursor = (resetMenuCursor + 1) % 3;
@@ -1013,9 +927,6 @@ void loop() {
     return;
   }
 
-  // STATE_RESET_WIFI_CONFIRM:
-  //   REC tap  → reset WiFi credentials + restart
-  //   PWR tap  → back to reset menu
   if (state == STATE_RESET_WIFI_CONFIRM) {
     if (recEv == EV_SINGLE) {
       cfg::resetWifi(); soundDelete();
@@ -1065,7 +976,4 @@ void loop() {
     }
     return;
   }
-
-  // ── Auto-sleep: fires from any non-recording, non-transfer state ──────────
-  checkAutoSleep();
 }
