@@ -38,7 +38,7 @@ static bool transcribeOnce(const String& wavPath, int noteNum) {
   if (!f) return false;
   size_t fileSize = f.size();
 
-  String bnd = "----PalaBoundary";
+  String bnd = "----AmarBoundary";
   String pre = "--" + bnd + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" + String(model) + "\r\n"
                "--" + bnd + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"note.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
   String post = "\r\n--" + bnd + "--\r\n";
@@ -186,7 +186,7 @@ String portalCss() {
     ".header-status{display:flex;align-items:center;gap:12px;font-size:12px;color:#aaa8a3}"
     ".batt-wrap{display:flex;align-items:center;gap:5px}"
     ".batt-bar{width:28px;height:13px;border:1.5px solid #aaa8a3;border-radius:3px;position:relative;display:inline-block}"
-    ".batt-bar::after{content:'';position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:3px;height:6px;background:#aaa8a3;border-radius:0 2px 2px 0}"
+    ".batt-bar::after{content:'';position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:3px;height=6px;background:#aaa8a3;border-radius:0 2px 2px 0}"
     ".batt-fill{position:absolute;left:1px;top:1px;bottom:1px;border-radius:1px;background:#6db56d;transition:width .3s}"
     ".batt-fill.low{background:#c0392b}"
     ".batt-fill.charging{background:#f0b429}"
@@ -340,7 +340,7 @@ void handleApiStatus() {
   transferServer.send(200, "application/json", json);
 }
 
-// ─── Portal root (/) ──────────────────────────────────────────────────────────
+// ─── Portal root (/) ─────────────────────────────────────────────────────────
 void handlePortalRoot() {
   loadIndex();
   Serial.println("[HTTP] GET /");
@@ -601,7 +601,7 @@ void handleNoteDelete() {
   transferServer.send(303);
 }
 
-// ─── /provision (GET) ────────────────────────────────────────────────────────
+// ─── /provision (GET) ───────────────────────────────────────────────────────
 void handleProvisionPage() {
   Serial.println("[HTTP] GET /provision");
 
