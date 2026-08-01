@@ -65,7 +65,22 @@ Credit where it's due — the original firmware already provided: voice **record
 | 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
 | 💾 **USB Mass Storage** | ➕ New | Menu item **"USB Drive"** mounts the SD card as a USB MSC drive on any host computer — browse, copy, or delete files directly. Hold REC to exit MSC mode; the SD remounts and the note index reloads automatically. Requires ESP32 Arduino core ≥ 2.0. |
 | 🕒 **Portable UTC epoch conversion** | 🔁 Changed | `utcTmToEpoch()` now uses a portable `mktime()` emulation (TZ save/restore) instead of `timegm()`, which is not available in the ESP32 Arduino/ESP-IDF toolchain. |
-| 🐱 **Tamagotchi** | ➕ New | Sixth menu tile (cursor 5) — cat-face icon, `STATE_TAMAGOTCHI` state, `showTamagotchi()` stub screen. Pet logic ships in its own module; the tile and screen are fully wired. |
+| 🐱 **Tamagotchi** | ➕ New | Sixth menu tile (cursor 5) — cat-face icon, `STATE_TAMAGOTCHI` state, `showTamagotchi()` stub screen. Pet logic ships in its own module; the tile and screen are fully wired. Based on **[pala-nekogotchi](https://github.com/defcon1702/pala-nekogotchi)** by defcon1702 — an offline virtual cat designed for this hardware, with real-time RTC aging, mood states, and 1-bit pixel-art sprites. |
+
+### Third-party addons & acknowledgements
+
+#### 🐱 Nekogotchi — by [defcon1702](https://github.com/defcon1702)
+
+The Tamagotchi feature module is derived from **[pala-nekogotchi](https://github.com/defcon1702/pala-nekogotchi)** — a fully offline virtual cat addon designed specifically for this hardware. It provides:
+
+- A real-time aging model driven by the on-board **PCF85063 RTC**, so the cat keeps living across deep-sleep.
+- Three stats (`hunger`, `happiness`, `energy`) that decay and recover over wall-clock time.
+- Five moods and multiple action poses rendered as **1-bit 150×150 pixel-art sprites** via `drawBitmap1BPP`.
+- State persistence to `/pet.dat` on the SD card.
+- A two-button control scheme matching the device's existing input convention.
+
+> **pala-nekogotchi** is released under the **MIT License** by defcon1702.
+> Source: <https://github.com/defcon1702/pala-nekogotchi>
 
 ---
 
