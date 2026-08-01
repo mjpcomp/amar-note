@@ -813,10 +813,43 @@ void showDeviceInfo() {
   refresh();
 }
 
+void showResetMenu(int cursor) {
+  clearWhite();
+  drawStr(16, 14, "reset", 1, BLACK);
+  hline(16, 32, W-32, BLACK);
+  const char* opts[3] = { "Reset WiFi", "Clear Keys", "Clear All" };
+  const int y0 = 52, step = 36, boxH = 28;
+  for (int i = 0; i < 3; i++) {
+    bool active = (i == cursor);
+    int y = y0 + i * step;
+    if (active) fillRoundRect(20, y, 160, boxH, 8, BLACK);
+    else        strokeRoundRect(20, y, 160, boxH, 8, 1, BLACK);
+    drawStrC(100, y + 8, opts[i], 1, active ? WHITE : BLACK);
+  }
+  hline(0, 179, W, BLACK);
+  fillRect(0, 180, W, 20, WHITE);
+  drawStr(8, 186, "rec=select", 1, BLACK);
+  const char* r = "pwr=scroll";
+  drawStr(W - 8 - textW(r, 1), 186, r, 1, BLACK);
+  refresh();
+}
+
+void showResetWifiConfirm() {
+  clearWhite();
+  drawKicker("reset wifi", 18);
+  drawStrC(100, 64,  "clear wifi only?", 1, BLACK);
+  drawStrC(100, 86,  "notes & keys kept", 1, BLACK);
+  drawStrC(100, 108, "re-enter portal on boot", 1, BLACK);
+  hline(20, 132, W - 40, BLACK);
+  drawStrC(100, 152, "rec = reset", 1, BLACK);
+  drawStrC(100, 172, "pwr = cancel", 1, BLACK);
+  refresh();
+}
+
 void showResetConfirm() {
   clearWhite();
   drawKicker("factory reset", 18);
-  drawStrC(100, 64,  "erase wifi & key?", 1, BLACK);
+  drawStrC(100, 64,  "clear wifi + all keys?", 1, BLACK);
   drawStrC(100, 86,  "notes are kept", 1, BLACK);
   hline(20, 110, W - 40, BLACK);
   drawStrC(100, 134, "rec = erase", 1, BLACK);

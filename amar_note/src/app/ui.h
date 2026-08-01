@@ -56,6 +56,8 @@ void showTransferConnecting();
 void showTransferMode(const char* ip);
 void showSettings(int cursor);
 void showDeviceInfo();
+void showResetMenu(int cursor);
+void showResetWifiConfirm();
 void showResetConfirm();
 void showResetDone();
 void showDeleteAllConfirm(int count, int cursor);
