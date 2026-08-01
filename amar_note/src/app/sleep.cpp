@@ -18,6 +18,14 @@ void resetActivity() {
 }
 
 void enterUltraSleep() {
+  // Re-initialise the panel in full-waveform mode before drawing the splash.
+  // If we were in partial-refresh mode (any screen other than idle), the
+  // full-waveform LUT is not active and forceFullRefresh() inside
+  // showUltraSleepScreen() will not render the image correctly, leaving the
+  // previous screen frozen on the display.  EPD_Init() reloads the full LUT
+  // and makes the subsequent refresh reliable regardless of prior state.
+  if (display) display->EPD_Init();
+
   showUltraSleepScreen();   // final image; refresh completes (read_busy) before we continue
   delay(120);
 
@@ -46,7 +54,7 @@ void enterUltraSleep() {
   esp_deep_sleep_start();
 }
 
-// ─── checkBatteryWarning ──────────────────────────────────────────────────────
+// ─── checkBatteryWarning ────────────────────────────────────────────────────
 //
 // Sampled every BAT_CHECK_INTERVAL_MS.  Shows a low-battery overlay for
 // 4 seconds when the level first drops below BAT_LOW_THRESHOLD (%), then
@@ -84,7 +92,7 @@ void checkBatteryWarning() {
   }
 }
 
-// ─── checkAutoSleep ───────────────────────────────────────────────────────────
+// ─── checkAutoSleep ─────────────────────────────────────────────────────────────
 //
 // Puts the device into ultra-sleep after ULTRA_SLEEP_MS of inactivity.
 // Guards: active transfer server or active recording suppress sleep.
