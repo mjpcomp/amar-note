@@ -22,15 +22,24 @@ extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
 // ─── Transcription ────────────────────────────────────────────────────────────
 static bool transcribeOnce(const String& wavPath, int noteNum) {
-  String oaiKey = cfg::openaiKey();
-  if (oaiKey.length() == 0) { Serial.println("[Whisper] no API key set"); return false; }
+  // Pick provider: 0 = OpenAI whisper-1, 1 = Groq whisper-large-v3-turbo
+  uint8_t prov  = cfg::sttProvider();
+  String  key   = (prov == 1) ? cfg::groqKey()   : cfg::openaiKey();
+  const char* host  = (prov == 1) ? "api.groq.com" : "api.openai.com";
+  const char* model = (prov == 1) ? "whisper-large-v3-turbo" : "whisper-1";
+  const char* path  = "/openai/v1/audio/transcriptions";  // same path for both
+
+  if (key.length() == 0) {
+    Serial.printf("[Whisper] no API key for provider %d\n", prov);
+    return false;
+  }
 
   File f = SD_MMC.open(wavPath.c_str());
   if (!f) return false;
   size_t fileSize = f.size();
 
   String bnd = "----PalaBoundary";
-  String pre = "--" + bnd + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n"
+  String pre = "--" + bnd + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" + String(model) + "\r\n"
                "--" + bnd + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"note.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
   String post = "\r\n--" + bnd + "--\r\n";
   size_t totalLen = pre.length() + fileSize + post.length();
@@ -40,15 +49,15 @@ static bool transcribeOnce(const String& wavPath, int noteNum) {
                          (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
   client.setHandshakeTimeout(15);
 
-  if (!client.connect("api.openai.com", 443, 15000)) { f.close(); return false; }
+  if (!client.connect(host, 443, 15000)) { f.close(); return false; }
 
-  client.printf("POST /v1/audio/transcriptions HTTP/1.1\r\n"
-                "Host: api.openai.com\r\n"
+  client.printf("POST %s HTTP/1.1\r\n"
+                "Host: %s\r\n"
                 "Authorization: Bearer %s\r\n"
                 "Content-Type: multipart/form-data; boundary=%s\r\n"
                 "Content-Length: %u\r\n"
                 "Connection: close\r\n\r\n",
-                oaiKey.c_str(), bnd.c_str(), (unsigned)totalLen);
+                path, host, key.c_str(), bnd.c_str(), (unsigned)totalLen);
   client.print(pre);
 
   uint8_t* chunk = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_8BIT);
@@ -107,7 +116,11 @@ bool transcribe(const String& wavPath, int noteNum) {
 }
 
 void transcribeAll() {
-  if (!cfg::hasOpenAiKey()) { Serial.println("[Whisper] no API key; skipping sync"); return; }
+  // Gate on whichever key matches the configured STT provider.
+  if (!cfg::hasSttKey()) {
+    Serial.printf("[Whisper] no key for stt_prov=%d; skipping sync\n", cfg::sttProvider());
+    return;
+  }
 
   int pending = 0;
   for (int i=0; i<(int)noteIndex.size(); i++) if(!noteIndex[i].hasText) pending++;
@@ -125,7 +138,7 @@ void transcribeAll() {
   Serial.printf("[Whisper] synced %d/%d pending\n", done, pending);
 }
 
-// ─── Portal helpers ──────────���────────────────────────────────────────────────
+// ─── Portal helpers ───────────────────────────────────────────────────────────
 String htmlEscape(const String& s) {
   String out = s;
   out.replace("&", "&amp;"); out.replace("<", "&lt;");
