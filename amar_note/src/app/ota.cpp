@@ -28,9 +28,101 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
   return rpat > lpat;
 }
 
+// Parse host, path (and optional port) out of an https:// URL.
+// Returns false if the URL doesn't look like https://.
+static bool parseHttpsUrl(const String& url, String& host, int& port, String& path) {
+  if (!url.startsWith("https://")) return false;
+  String rest = url.substring(8); // strip "https://"
+  int slash = rest.indexOf('/');
+  String hostPort = (slash >= 0) ? rest.substring(0, slash) : rest;
+  path = (slash >= 0) ? rest.substring(slash) : "/";
+  int colon = hostPort.indexOf(':');
+  if (colon >= 0) {
+    host = hostPort.substring(0, colon);
+    port = hostPort.substring(colon + 1).toInt();
+  } else {
+    host = hostPort;
+    port = 443;
+  }
+  return host.length() > 0;
+}
+
+// Follow a single HTTPS redirect (one hop only — GitHub release asset
+// browser_download_url always redirects once to objects.githubusercontent.com).
+// Returns the Location header value on a 3xx, or the original url on 200,
+// or empty string on error.
+static String resolveRedirect(const String& url) {
+  String host, path;
+  int port = 443;
+  if (!parseHttpsUrl(url, host, path, port)) {
+    Serial.printf("[OTA] resolveRedirect: bad url: %s\n", url.c_str());
+    return "";
+  }
+
+  WiFiClientSecure client;
+  client.setCACertBundle(x509_crt_bundle_start,
+                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+  client.setHandshakeTimeout(15);
+
+  if (!client.connect(host.c_str(), port, 10000)) {
+    Serial.printf("[OTA] resolveRedirect: connect failed to %s\n", host.c_str());
+    return "";
+  }
+
+  // Use HEAD so we don't pull the whole binary just to get the redirect.
+  client.printf(
+    "HEAD %s HTTP/1.1\r\n"
+    "Host: %s\r\n"
+    "User-Agent: AmarNote/" FIRMWARE_VERSION "\r\n"
+    "Connection: close\r\n\r\n",
+    path.c_str(), host.c_str()
+  );
+
+  uint32_t deadline = millis() + 10000;
+  while (!client.available() && millis() < deadline) delay(20);
+
+  String location = "";
+  bool is3xx = false;
+  while (client.available() || (client.connected() && millis() < deadline)) {
+    if (!client.available()) { delay(5); continue; }
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break; // end of headers
+    if (line.startsWith("HTTP/")) {
+      // e.g. "HTTP/1.1 302 Found"
+      int sp1 = line.indexOf(' ');
+      int sp2 = line.indexOf(' ', sp1 + 1);
+      int code = line.substring(sp1 + 1, sp2 > 0 ? sp2 : line.length()).toInt();
+      is3xx = (code >= 300 && code < 400);
+      if (code == 200) {
+        // No redirect — return the original URL as-is.
+        client.stop();
+        return url;
+      }
+      if (!is3xx) {
+        Serial.printf("[OTA] resolveRedirect: unexpected status %d\n", code);
+        client.stop();
+        return "";
+      }
+    } else if (is3xx) {
+      if (line.startsWith("Location:") || line.startsWith("location:")) {
+        location = line.substring(line.indexOf(':') + 1);
+        location.trim();
+      }
+    }
+  }
+  client.stop();
+
+  if (location.length() > 0) {
+    Serial.printf("[OTA] resolved redirect -> %s\n", location.c_str());
+    return location;
+  }
+  Serial.println("[OTA] resolveRedirect: no Location header found");
+  return "";
+}
+
 bool otaCheckGithub(String& latestTag, String& assetUrl) {
   const char* host = "api.github.com";
-  // Build path: /repos/OWNER/REPO/releases/latest
   String path = "/repos/" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "/releases/latest";
 
   WiFiClientSecure client;
@@ -43,7 +135,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     return false;
   }
 
-  // Build auth header — use stored GitHub token if available (needed for private repos)
   String authHeader = "";
   String tok = cfg::githubToken();
   if (tok.length() > 0) authHeader = "Authorization: Bearer " + tok + "\r\n";
@@ -61,7 +152,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
   uint32_t deadline = millis() + 15000;
   while (!client.available() && millis() < deadline) delay(20);
 
-  // Skip HTTP headers
   bool inBody = false;
   String body = "";
   while (client.available() || (client.connected() && millis() < deadline)) {
@@ -69,7 +159,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     String line = client.readStringUntil('\n');
     if (!inBody) {
       if (line == "\r" || line.length() == 0) inBody = true;
-      // Check for non-200
       if (line.startsWith("HTTP/") && line.indexOf(" 200 ") < 0) {
         Serial.printf("[OTA] GitHub API: %s\n", line.c_str());
         client.stop();
@@ -77,7 +166,7 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
       }
     } else {
       body += line;
-      if (body.length() > 8192) break; // safety cap
+      if (body.length() > 8192) break;
     }
   }
   client.stop();
@@ -87,7 +176,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     return false;
   }
 
-  // Parse JSON — we only need tag_name and the first .bin asset browser_download_url
   DynamicJsonDocument doc(8192);
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
@@ -101,22 +189,32 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     return false;
   }
 
-  // Find first .bin asset
+  // Find first .bin asset — grab browser_download_url then resolve the redirect.
+  String redirectUrl = "";
   JsonArray assets = doc["assets"].as<JsonArray>();
   for (JsonObject asset : assets) {
     String name = asset["name"] | "";
     if (name.endsWith(".bin")) {
-      assetUrl = asset["browser_download_url"] | "";
+      redirectUrl = asset["browser_download_url"] | "";
       break;
     }
   }
 
-  if (assetUrl.length() == 0) {
+  if (redirectUrl.length() == 0) {
     Serial.printf("[OTA] release %s has no .bin asset\n", latestTag.c_str());
     return false;
   }
 
-  Serial.printf("[OTA] latest=%s local=%s url=%s\n",
+  // Resolve the GitHub redirect to the final objects.githubusercontent.com URL.
+  // HTTPUpdate does not follow redirects itself, so we must do it here.
+  assetUrl = resolveRedirect(redirectUrl);
+  if (assetUrl.length() == 0) {
+    Serial.printf("[OTA] could not resolve asset URL for %s\n", latestTag.c_str());
+    // Fall back to the original URL — it may work in some cases.
+    assetUrl = redirectUrl;
+  }
+
+  Serial.printf("[OTA] latest=%s local=%s\n[OTA] asset=%s\n",
                 latestTag.c_str(), FIRMWARE_VERSION, assetUrl.c_str());
 
   return isNewer(latestTag, FIRMWARE_VERSION);
