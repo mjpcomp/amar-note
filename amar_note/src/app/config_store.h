@@ -61,6 +61,13 @@ void    setGithubAiEnrich(bool on);
 bool    idleTouchRecord();
 void    setIdleTouchRecord(bool on);
 
+// ── Minimum recording threshold ──────────────────────────────────────────────
+// 0 = off (keep all recordings regardless of length)
+// >0 = discard recordings shorter than this many seconds
+// Valid user-selectable values: 0 (off), 1, 2, 5
+uint8_t minRecSecs();
+void    setMinRecSecs(uint8_t secs);
+
 void    factoryReset();
 void    resetWifi();   // erases ssid + pass only; leaves keys intact
 void    resetKeys();   // erases all API/service keys; leaves WiFi intact

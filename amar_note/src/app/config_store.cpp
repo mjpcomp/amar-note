@@ -160,6 +160,14 @@ void setGithubAiEnrich(bool on) { prefs.putBool("ghai", on); }
 bool idleTouchRecord()           { return prefs.getBool("idlerec", false); }
 void setIdleTouchRecord(bool on) { prefs.putBool("idlerec", on); }
 
+// ── Minimum recording threshold ──────────────────────────────────────────────
+// Valid values stored: 0 (off), 1, 2, 5 seconds.
+// Default 0 = off (keep all recordings).
+// factoryReset() calls prefs.clear() which covers this key automatically.
+
+uint8_t minRecSecs() { return (uint8_t)prefs.getUChar("minrec", MIN_REC_SECS_DEFAULT); }
+void setMinRecSecs(uint8_t secs) { prefs.putUChar("minrec", secs); }
+
 void factoryReset() { prefs.clear(); }
 
 void resetWifi() {

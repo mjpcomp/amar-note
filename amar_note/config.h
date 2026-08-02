@@ -65,6 +65,10 @@
 #define SPK_VOL_MAX      100.0f                   // ES8311 output volume ceiling
 #define MIN_NOTE_SECONDS 1                        // recordings shorter than this are discarded
 
+/* Minimum recording threshold (min rec setting) */
+// 0 = off (keep all recordings), otherwise discard recordings shorter than this many seconds.
+#define MIN_REC_SECS_DEFAULT  0
+
 /* Storage paths */
 #define NOTES_DIR  "/notes"
 #define INDEX_FILE "/notes/index.csv"
@@ -102,7 +106,8 @@
 // Bump this when adding or removing rows from SETTINGS_ITEMS[] in the .ino
 // and the corresponding showSettings() / handleTouch() logic in ui.cpp.
 //
-// Current rows: Sounds | Transfer | Device | Erase All | Reset | idle rec
+// Current rows: Sounds | Transfer | Device | idle rec | min rec | Reset
+// (Erase All is now a sub-option inside Reset; net row count unchanged = 6)
 //
 #define SETTINGS_COUNT  6
 
