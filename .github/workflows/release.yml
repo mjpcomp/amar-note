@@ -1,0 +1,133 @@
+# Amar Note — Manual release workflow
+#
+# Run this from Actions > "Release Firmware" > "Run workflow".
+# Enter the new version (e.g. 1.6.0 or 1.5.1) and click Run.
+#
+# What it does:
+#   1. Reads the current FIRMWARE_VERSION from config.h (shown in the log)
+#   2. Writes the new version into config.h
+#   3. Commits + pushes that change to the branch you run it from
+#   4. Creates + pushes a matching git tag (v<version>)
+#   5. Compiles the firmware
+#   6. Creates a GitHub Release with the .bin attached
+
+name: Release Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version number (e.g. 1.6.0 or 1.5.1) — no leading v'
+        required: true
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to push commit + tag + create release
+
+    steps:
+      # ── 1. Checkout (full history so we can push back) ─────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history required for tagging
+
+      # ── 2. Show current version ───────────────────────────────────────
+      - name: Show current version
+        run: |
+          CURRENT=$(grep -oP '(?<=#define FIRMWARE_VERSION  ")v[^"]+' amar_note/config.h)
+          echo "Current FIRMWARE_VERSION: $CURRENT"
+          echo "New FIRMWARE_VERSION:     v${{ github.event.inputs.version }}"
+
+      # ── 3. Validate version format ────────────────────────────────────
+      - name: Validate version
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "::error::Version must be in format X.Y or X.Y.Z (e.g. 1.6.0) — no leading v"
+            exit 1
+          fi
+
+      # ── 4. Bump FIRMWARE_VERSION in config.h ────────────────────────────
+      - name: Bump version in config.h
+        run: |
+          VERSION="v${{ github.event.inputs.version }}"
+          sed -i "s|#define FIRMWARE_VERSION  \"v[^\"]*\"|#define FIRMWARE_VERSION  \"$VERSION\"|" amar_note/config.h
+          # Verify the change landed
+          grep FIRMWARE_VERSION amar_note/config.h
+
+      # ── 5. Commit + push version bump ─────────────────────────────────
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add amar_note/config.h
+          git commit -m "chore: bump FIRMWARE_VERSION to v${{ github.event.inputs.version }}"
+          git push
+
+      # ── 6. Create + push git tag ──────────────────────────────────────
+      - name: Tag release
+        run: |
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+
+      # ── 7. Install + configure arduino-cli ─────────────────────────────
+      - name: Install and configure arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      # ── 8. Install ESP32 core ───────────────────────────────────────────
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.2.0
+
+      # ── 9. Install libraries ──────────────────────────────────────────────
+      - name: Install libraries
+        run: |
+          arduino-cli lib install \
+            "ArduinoJson@7.3.1" \
+            "Adafruit GFX Library"
+
+      # ── 10. Create secrets.h stub ────────────────────────────────────────
+      - name: Create secrets.h stub
+        run: |
+          cat > amar_note/secrets.h << 'EOF'
+          // CI stub — placeholder values; firmware uses NVS at runtime.
+          #pragma once
+          #define WIFI_SSID  "...."
+          #define WIFI_PASS  "...."
+          #define OPENAI_KEY "...."
+          EOF
+
+      # ── 11. Compile ─────────────────────────────────────────────────────
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PartitionScheme=custom \
+            --build-property build.partitions=partitions \
+            --export-binaries \
+            amar_note/amar_note.ino
+
+      # ── 12. Rename binary ───────────────────────────────────────────────
+      - name: Rename binary
+        run: |
+          BIN=$(find amar_note/build -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -1)
+          echo "Found binary: $BIN"
+          cp "$BIN" amar-note-firmware.bin
+
+      # ── 13. Create GitHub Release with .bin ───────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ github.event.inputs.version }}"
+          name: "Amar Note v${{ github.event.inputs.version }}"
+          files: amar-note-firmware.bin
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
