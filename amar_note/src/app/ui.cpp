@@ -790,6 +790,9 @@ void showDeviceInfo() {
 //   2 Notes       3 +Vault
 //        4 Factory Reset
 //
+// When cursor==3 (+Vault), Notes is also highlighted to show the
+// operation covers Notes AND the Vault together.
+//
 void showResetMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "reset", 1, BLACK);
@@ -805,8 +808,10 @@ void showResetMenu(int cursor) {
   drawModernPill(col0x, row0y, pillW, pillH, "Rst WiFi",  cursor == 0);
   drawModernPill(col1x, row0y, pillW, pillH, "Clr Keys",  cursor == 1);
   // Row 1: Notes | +Vault
-  drawModernPill(col0x, row1y, pillW, pillH, "Notes",   cursor == 2);
-  drawModernPill(col1x, row1y, pillW, pillH, "+Vault",  cursor == 3);
+  // Notes also highlights when +Vault is selected, making it clear
+  // that cursor==3 erases both notes AND the vault.
+  drawModernPill(col0x, row1y, pillW, pillH, "Notes",  cursor == 2 || cursor == 3);
+  drawModernPill(col1x, row1y, pillW, pillH, "+Vault", cursor == 3);
   // Row 2 (centred, wide): Factory Reset
   drawModernPill(cancelX, cancelY, cancelW, pillH, "Factory Reset", cursor == 4);
 
