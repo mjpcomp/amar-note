@@ -21,6 +21,10 @@
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
+// ─── OTA progress globals (file-scope so lambdas and the API handler share them)
+volatile int         g_otaPct   = 0;
+volatile const char* g_otaStage = "idle";
+
 // ─── Transcription ────────────────────────────────────────────────────────────
 static bool transcribeOnce(const String& wavPath, int noteNum) {
   // Pick provider: 0 = OpenAI whisper-1, 1 = Groq whisper-large-v3-turbo
@@ -923,10 +927,6 @@ void handleOtaPage() {
 }
 
 // ─── /ota/run (POST) ─────────────────────────────────────────────────────────
-// Sends an immediate browser response with a live progress bar (SSE-style
-// keep-alive via chunked transfer), then wires HTTPUpdate callbacks so the
-// e-paper display shows download / flash / reboot stages with a ≥5% gate
-// on partial refreshes to avoid hammering the slow panel.
 void handleOtaRun() {
   if (!transferServer.hasArg("url") || transferServer.arg("url").length() == 0) {
     transferServer.send(400, "text/plain", "Missing url"); return;
@@ -973,14 +973,10 @@ void handleOtaRun() {
   delay(250);
 
   // ── State shared between callbacks (stack-safe: small ints + const ptr)
-  static int    s_lastPct  = -1;
-  static int    s_totalKb  = 0;
+  static int s_lastPct = -1;
   s_lastPct = -1;
-  s_totalKb = 0;
 
-  // Expose progress to /api/ota-progress polls
-  extern volatile int   g_otaPct;
-  extern volatile const char* g_otaStage;
+  // Reset progress globals before starting
   g_otaPct   = 0;
   g_otaStage = "connecting";
 
@@ -1033,9 +1029,6 @@ void handleOtaRun() {
 
 // ─── /api/ota-progress ───────────────────────────────────────────────────────
 // Polled by the browser page while httpUpdate.update() is blocking.
-volatile int          g_otaPct   = 0;
-volatile const char*  g_otaStage = "idle";
-
 void handleOtaProgressApi() {
   String json = "{\"pct\":";
   json += String((int)g_otaPct);
