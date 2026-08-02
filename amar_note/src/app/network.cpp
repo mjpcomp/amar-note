@@ -926,14 +926,61 @@ void handleOtaPage() {
   transferServer.send(200, "text/html", html);
 }
 
+// ─── OTA background task ─────────────────────────────────────────────────────
+// Holds the URL as a static buffer so the FreeRTOS task can access it safely
+// after handleOtaRun() returns.
+static char s_otaUrl[512];
+
+static void otaTask(void* /*param*/) {
+  g_otaStage = "downloading";
+  g_otaPct   = 0;
+  showOtaProgress(0, "downloading");
+  Serial.printf("[OTA] task start: %s\n", s_otaUrl);
+
+  bool ok = otaDownloadAndFlash(
+    String(s_otaUrl),
+    [](size_t done, size_t total) {
+      int pct = (total > 0) ? (int)constrain((done * 100) / total, 0, 99) : 0;
+      g_otaPct = pct;
+      showOtaProgress(pct, "downloading");
+    }
+  );
+
+  if (ok) {
+    g_otaPct   = 100;
+    g_otaStage = "rebooting";
+    showOtaProgress(100, "rebooting");
+    Serial.println("[OTA] flash OK — rebooting");
+    delay(1500);
+    ESP.restart();
+  } else {
+    g_otaPct   = 0;
+    g_otaStage = "failed";
+    showError("ota failed");
+    Serial.println("[OTA] flash failed");
+  }
+  vTaskDelete(nullptr);
+}
+
 // ─── /ota/run (POST) ─────────────────────────────────────────────────────────
 void handleOtaRun() {
   if (!transferServer.hasArg("url") || transferServer.arg("url").length() == 0) {
     transferServer.send(400, "text/plain", "Missing url"); return;
   }
-  String url = transferServer.arg("url");
 
-  // ── Send browser page immediately (device blocks during httpUpdate.update)
+  String url = transferServer.arg("url");
+  url.trim();
+  if ((int)url.length() >= (int)sizeof(s_otaUrl)) {
+    transferServer.send(400, "text/plain", "URL too long"); return;
+  }
+  strlcpy(s_otaUrl, url.c_str(), sizeof(s_otaUrl));
+
+  // Reset progress so the browser poll starts fresh
+  g_otaPct   = 0;
+  g_otaStage = "connecting";
+
+  // Send the browser page immediately — the web server stays alive because
+  // the actual flash runs in a separate FreeRTOS task on core 0.
   transferServer.send(200, "text/html",
     "<!doctype html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -955,7 +1002,6 @@ void handleOtaRun() {
     "The device reboots automatically when done &mdash; "
     "if it fails it stays on the current version.</p>"
     "</div></div>"
-    // Poll /api/ota-progress every 1 s and update the bar
     "<script>"
     "(function(){"
     "var bar=document.getElementById('bar');"
@@ -964,71 +1010,28 @@ void handleOtaRun() {
     "fetch('/api/ota-progress').then(function(r){return r.json();}).then(function(d){"
     "bar.style.width=d.pct+'%';"
     "stage.textContent=d.stage||'';"
-    "if(d.pct<100)setTimeout(poll,1000);"
+    "if(d.stage!=='rebooting'&&d.stage!=='failed')setTimeout(poll,1000);"
     "}).catch(function(){setTimeout(poll,2000);});}"
-    "setTimeout(poll,1000);"
+    "setTimeout(poll,800);"
     "})();"
     "</script>"
     "</body></html>");
-  delay(250);
 
-  // ── State shared between callbacks (stack-safe: small ints + const ptr)
-  static int s_lastPct = -1;
-  s_lastPct = -1;
-
-  // Reset progress globals before starting
-  g_otaPct   = 0;
-  g_otaStage = "connecting";
-
-  // ── onStart: show blank bar at 0%
-  httpUpdate.onStart([]() {
-    g_otaPct   = 0;
-    g_otaStage = "downloading";
-    showOtaProgress(0, "downloading");
-    Serial.println("[OTA] start");
-  });
-
-  // ── onProgress: gate redraws to every >=5% change
-  httpUpdate.onProgress([](int current, int total) {
-    int pct = (total > 0) ? constrain((current * 100) / total, 0, 99) : 0;
-    g_otaPct = pct;
-    if (pct >= s_lastPct + 5 || pct == 0) {
-      s_lastPct = pct;
-      showOtaProgress(pct, "downloading");
-      Serial.printf("[OTA] progress %d%%\n", pct);
-    }
-  });
-
-  // ── onEnd: flash complete, show 100% before reboot
-  httpUpdate.onEnd([]() {
-    g_otaPct   = 100;
-    g_otaStage = "rebooting";
-    showOtaProgress(100, "rebooting");
-    Serial.println("[OTA] done — rebooting");
-  });
-
-  // ── onError: show error screen
-  httpUpdate.onError([](int err) {
-    g_otaPct   = 0;
-    g_otaStage = "failed";
-    showError("ota failed");
-    Serial.printf("[OTA] error %d: %s\n", err, httpUpdate.getLastErrorString().c_str());
-  });
-
-  WiFiClientSecure client;
-  client.setCACertBundle(x509_crt_bundle_start,
-                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
-  httpUpdate.rebootOnUpdate(true);
-  t_httpUpdate_return r = httpUpdate.update(client, url, FW_VERSION);
-  if (r == HTTP_UPDATE_FAILED)
-    Serial.printf("[OTA] failed (%d): %s\n",
-                  httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
-  else if (r == HTTP_UPDATE_NO_UPDATES)
-    Serial.println("[OTA] no update available");
+  // Spawn the OTA task on core 0 (network on core 1, app on core 0 — flash
+  // write goes to core 0 which has access to the SPI flash partition API).
+  xTaskCreatePinnedToCore(
+    otaTask,
+    "otaTask",
+    8192,   // stack — otaDownloadAndFlash uses ~3-4 KB
+    nullptr,
+    1,      // priority
+    nullptr,
+    0       // core 0
+  );
 }
 
 // ─── /api/ota-progress ───────────────────────────────────────────────────────
-// Polled by the browser page while httpUpdate.update() is blocking.
+// Polled by the browser page while the OTA task runs in the background.
 void handleOtaProgressApi() {
   String json = "{\"pct\":";
   json += String((int)g_otaPct);
