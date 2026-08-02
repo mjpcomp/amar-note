@@ -719,7 +719,38 @@ void showTransferMode(const char* ip) {
   refresh();
 }
 
-// ─── Settings screen ──────────────────────────────────────────────────────────────────────────
+// ─── OTA progress screen ──────────────────────────────────────────────────────────────────────────
+// pct   : 0-100
+// stage : short label shown below the bar, e.g. "downloading" or "flashing"
+// Uses forceFullRefresh() on the first call (pct==0) and refresh() on updates
+// so the e-paper driver picks the right mode automatically.
+void showOtaProgress(int pct, const char* stage) {
+  clearWhite();
+  drawKicker("update", 18);
+  // Download arrow icon (simple downward arrow into a tray)
+  int cx = 100, iy = 68;
+  thickLine(cx, iy - 20, cx, iy + 4,  3, BLACK);   // shaft
+  thickLine(cx - 12, iy - 8, cx, iy + 8,  3, BLACK); // left chevron
+  thickLine(cx + 12, iy - 8, cx, iy + 8,  3, BLACK); // right chevron
+  hline(cx - 18, iy + 14, 36, BLACK);                 // tray base
+  hline(cx - 18, iy + 16, 36, BLACK);
+  // Progress bar
+  int barW = 144, barH = 12, barX = 28, barY = 100;
+  strokeRoundRect(barX, barY, barW, barH, 6, 1, BLACK);
+  int p = constrain(pct, 0, 100);
+  if (p > 0) {
+    int fill = ((barW - 4) * p) / 100;
+    if (fill > 0) fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 4, BLACK);
+  }
+  // Percentage label
+  char buf[8]; snprintf(buf, sizeof(buf), "%d%%", p);
+  drawStrC(cx, barY + barH + 12, buf, 1, BLACK);
+  // Stage label (e.g. "downloading" / "flashing" / "rebooting")
+  if (stage && strlen(stage) > 0) drawStrC(cx, barY + barH + 28, stage, 1, BLACK);
+  refresh();
+}
+
+// ─── Settings screen ──────────────────────────────────────────────────────────────────────
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);

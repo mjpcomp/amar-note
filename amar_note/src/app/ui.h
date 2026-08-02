@@ -54,6 +54,7 @@ void showUltraSleepScreen();
 void showPlaybackOverlay();
 void showTransferConnecting();
 void showTransferMode(const char* ip);
+void showOtaProgress(int pct, const char* stage);   // OTA flash progress screen
 void showSettings(int cursor);
 void showDeviceInfo();
 void showResetMenu(int cursor);
