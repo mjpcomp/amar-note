@@ -43,12 +43,10 @@ jobs:
           arduino-cli core install esp32:esp32@3.2.0
 
       # ── 4. Install libraries from Arduino Library Manager ─────────────────
-      # Rules:
-      #   - Only libs that exist in the Library Manager index go here.
-      #   - WebServer, HTTPUpdate, WiFiClientSecure, SD_MMC, FS ship with
-      #     esp32:esp32 — do NOT list them here, arduino-cli will error.
-      #   - BSP headers (i2c_bsp, audio_bsp, epaper_driver_bsp, usb_msc)
-      #     are project-local source files, not external libraries.
+      # Only ArduinoJson and Adafruit GFX need separate installation.
+      # WebServer, HTTPUpdate, WiFiClientSecure, SD_MMC, FS ship with esp32:esp32.
+      # BSP headers (i2c_bsp, audio_bsp, epaper_driver_bsp, usb_msc) are
+      # project-local source files, not external libraries.
       - name: Install libraries
         run: |
           arduino-cli lib install \
@@ -56,11 +54,18 @@ jobs:
             "Adafruit GFX Library"
 
       # ── 5. Create secrets.h stub (CI build — no real keys needed) ─────────
+      # config_store.cpp reads WIFI_SSID, WIFI_PASS, and OPENAI_KEY from
+      # secrets.h and seeds NVS only if they are not placeholder dot-strings.
+      # Defining them as "...." here satisfies the compiler and the
+      # isPlaceholder() guard skips the NVS write at runtime.
       - name: Create secrets.h stub
         run: |
           cat > amar_note/secrets.h << 'EOF'
-          // CI stub — no real secrets; firmware uses NVS at runtime
+          // CI stub — placeholder values; firmware uses NVS at runtime.
           #pragma once
+          #define WIFI_SSID  "...."
+          #define WIFI_PASS  "...."
+          #define OPENAI_KEY "...."
           EOF
 
       # ── 6. Compile ─────────────────────────────────────────────────────────
