@@ -1,4 +1,5 @@
 #include "config_store.h"
+#include "../../config.h"
 #include <Preferences.h>
 #include <string.h>
 #include "../../secrets.h"
@@ -88,7 +89,7 @@ bool setGroqKey(const String& key) {
 
 void setSttProvider(uint8_t p) { prefs.putUChar("sttprov", p); }
 
-// ── AI enrichment ────────────────────────────────────────────────────────────
+// ── AI enrichment ────────────────────────────────────────────────────────────────────────────────────
 
 uint8_t enrichProvider() {
   return (uint8_t)prefs.getUChar("enrichprov", 0);
@@ -115,7 +116,7 @@ void setEnrichModel(const String& model) {
   // Silently ignore unknown values.
 }
 
-// ── GitHub / Obsidian vault ──────────────────────────────────────────────────
+// ── GitHub / Obsidian vault ────────────────────────────────────────────────────────────────────────
 
 String githubToken()  { return prefs.getString("ghtok",    ""); }
 String githubRepo()   { return prefs.getString("ghrepo",   ""); }
@@ -155,12 +156,12 @@ bool setGithubDir(const String& dir) {
 void setGithubEnabled(bool on)  { prefs.putBool("ghon", on); }
 void setGithubAiEnrich(bool on) { prefs.putBool("ghai", on); }
 
-// ── Touch behaviour ──────────────────────────────────────────────────────────
+// ── Touch behaviour ──────────────────────────────────────────────────────────────────────────────────────
 
 bool idleTouchRecord()           { return prefs.getBool("idlerec", false); }
 void setIdleTouchRecord(bool on) { prefs.putBool("idlerec", on); }
 
-// ── Minimum recording threshold ──────────────────────────────────────────────
+// ── Minimum recording threshold ─────────────────────────────────────────────────────────────────────────
 // Valid values stored: 0 (off), 1, 2, 5 seconds.
 // Default 0 = off (keep all recordings).
 // factoryReset() calls prefs.clear() which covers this key automatically.
