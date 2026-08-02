@@ -151,7 +151,7 @@ static void iconUsbPlug(int cx, int cy, uint8_t col) {
   fillCircle(cx, cy-17, 2, col);
 }
 
-// ── Menu tile icon: cute cat face (Tamagotchi) ─────────────────────────────────
+// ── Menu tile icon: cute cat face (Pixi Cat) ─────────────────────────────────
 static void iconCatFace(int cx, int cy, uint8_t col) {
   strokeCircle(cx, cy+2, 13, 2, col);
   fillTriangle(cx-13, cy-8,  cx-6,  cy-8,  cx-10, cy-18, col);
@@ -487,10 +487,10 @@ void showMenu(int cursor) {
   const int lblH    = 13;
 
   struct { int x; int y; int idx; const char* label; } tiles[4] = {
-    { gridLx, gridTy,  2, "Sync"       },
-    { gridRx, gridTy,  3, "Settings"   },
-    { gridLx, gridBy,  4, "USB"        },
-    { gridRx, gridBy,  5, "Tamagotchi" },
+    { gridLx, gridTy,  2, "Sync"     },
+    { gridRx, gridTy,  3, "Settings" },
+    { gridLx, gridBy,  4, "USB"      },
+    { gridRx, gridBy,  5, "Pixi Cat" },
   };
 
   for (int t = 0; t < 4; t++) {
@@ -787,8 +787,8 @@ void showDeviceInfo() {
 // ─── Reset sub-screen: 5 modern pills ────────────────────────────────────────────────────────
 //
 // Pills (cursor 0–4):
-//   0 Reset WiFi     1 Clear Keys
-//   2 Erase Notes    3 Erase Notes+Vault
+//   0 Rst WiFi    1 Clr Keys
+//   2 Notes       3 Notes+Vault
 //        4 Factory Reset
 //
 void showResetMenu(int cursor) {
@@ -802,12 +802,12 @@ void showResetMenu(int cursor) {
   const int cancelW = 160, cancelX = (W - cancelW) / 2;
   const int cancelY = row1y + pillH + gap;
 
-  // Row 0: Reset WiFi | Clear Keys
-  drawModernPill(col0x, row0y, pillW, pillH, "Reset WiFi",  cursor == 0);
-  drawModernPill(col1x, row0y, pillW, pillH, "Clear Keys",  cursor == 1);
-  // Row 1: Erase Notes | Erase Notes+Vault
-  drawModernPill(col0x, row1y, pillW, pillH, "Erase Notes",      cursor == 2);
-  drawModernPill(col1x, row1y, pillW, pillH, "Notes+Vault",      cursor == 3);
+  // Row 0: Rst WiFi | Clr Keys
+  drawModernPill(col0x, row0y, pillW, pillH, "Rst WiFi",  cursor == 0);
+  drawModernPill(col1x, row0y, pillW, pillH, "Clr Keys",  cursor == 1);
+  // Row 1: Notes | Notes+Vault
+  drawModernPill(col0x, row1y, pillW, pillH, "Notes",       cursor == 2);
+  drawModernPill(col1x, row1y, pillW, pillH, "Notes+Vault", cursor == 3);
   // Row 2 (centred, wide): Factory Reset
   drawModernPill(cancelX, cancelY, cancelW, pillH, "Factory Reset", cursor == 4);
 
@@ -898,7 +898,7 @@ void showUsbMsc() {
 
 void showTamagotchi() {
   clearWhite();
-  drawStr(16, 14, "tamagotchi", 1, BLACK);
+  drawStr(16, 14, "pixi cat", 1, BLACK);
   hline(16, 26, W-32, BLACK);
   iconCatFace(100, 88, BLACK);
   drawStrC(100, 118, "coming soon", 1, BLACK);
