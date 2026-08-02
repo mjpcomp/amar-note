@@ -37,18 +37,23 @@ jobs:
 
       # ── 3. Install ESP32 Arduino core ──────────────────────────────────
       # 3.2.0 = IDF 5.3 — required for driver/i2c_master.h used in the sketch.
-      # 3.0.x shipped IDF 5.1 which still used the legacy driver/i2c.h API.
       - name: Install ESP32 core
         run: |
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.2.0
 
       # ── 4. Install libraries from Arduino Library Manager ─────────────────
-      # Only ArduinoJson needs separate installation.
-      # WebServer, HTTPUpdate, WiFiClientSecure, SD, FS ship with esp32:esp32.
+      # Rules:
+      #   - Only libs that exist in the Library Manager index go here.
+      #   - WebServer, HTTPUpdate, WiFiClientSecure, SD_MMC, FS ship with
+      #     esp32:esp32 — do NOT list them here, arduino-cli will error.
+      #   - BSP headers (i2c_bsp, audio_bsp, epaper_driver_bsp, usb_msc)
+      #     are project-local source files, not external libraries.
       - name: Install libraries
         run: |
-          arduino-cli lib install "ArduinoJson@7.3.1"
+          arduino-cli lib install \
+            "ArduinoJson@7.3.1" \
+            "Adafruit GFX Library"
 
       # ── 5. Create secrets.h stub (CI build — no real keys needed) ─────────
       - name: Create secrets.h stub
