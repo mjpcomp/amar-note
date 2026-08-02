@@ -8,6 +8,7 @@
 #include "notes.h"
 #include "ui.h"
 #include "../../sounds.h"
+#include "config_store.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -21,7 +22,7 @@ extern "C" {
 // The producer task and the consumer drain loop both observe this.
 volatile bool g_stopRecording = false;
 
-// Set true when record() discards a note for being under MIN_NOTE_SECONDS.
+// Set true when record() discards a note for being under the min-rec threshold.
 // Cleared at the start of every record() call so stale state never lingers.
 bool g_lastRecTooShort = false;
 
@@ -133,17 +134,23 @@ bool record() {
 
   vRingbufferDeleteWithCaps(ctx.ring);
 
-  // Discard accidental taps — notes shorter than MIN_NOTE_SECONDS are deleted
-  // from the card immediately. The file is already on disk at this point, so
-  // we close it, remove it, flag the caller, and return false.
-  const uint32_t minBytes = (uint32_t)MIN_NOTE_SECONDS * SAMPLE_RATE * 2;
-  if (totalMono < minBytes) {
-    f.close();
-    SD_MMC.remove(path);
-    g_lastRecTooShort = true;
-    Serial.printf("[Rec] discarded (too short): %lu bytes < %lu min\n",
-                  (unsigned long)totalMono, (unsigned long)minBytes);
-    return false;
+  // ── Min-rec threshold ────────────────────────────────────────────────────
+  // When minRecSecs() == 0 the feature is off — keep every recording.
+  // When > 0, discard recordings shorter than that many seconds.
+  // The file is already on disk so we close, remove, flag, and return false.
+  uint8_t minSecs = cfg::minRecSecs();
+  if (minSecs > 0) {
+    const uint32_t minBytes = (uint32_t)minSecs * SAMPLE_RATE * 2;
+    if (totalMono < minBytes) {
+      f.close();
+      SD_MMC.remove(path);
+      g_lastRecTooShort = true;
+      Serial.printf("[Rec] discarded (min-rec %us): %lu bytes < %lu min\n",
+                    (unsigned)minSecs,
+                    (unsigned long)totalMono,
+                    (unsigned long)minBytes);
+      return false;
+    }
   }
 
   f.seek(0);
