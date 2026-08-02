@@ -3,13 +3,14 @@
 #include "config_store.h"
 #include "WiFiClientSecure.h"
 #include <ArduinoJson.h>
+#include <Update.h>
 #include "ota.h"
 
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
-// Simple semver-style comparison: strips leading 'v', splits on '.', compares numerically.
-// Returns true if remoteTag is strictly newer than localTag.
+// ─── Helpers ─────────────────────────────────────────────────────────────────────────
+
 static bool isNewer(const String& remoteTag, const String& localTag) {
   auto parseVer = [](const String& tag, int& maj, int& min, int& pat) {
     String s = tag;
@@ -28,98 +29,7 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
   return rpat > lpat;
 }
 
-// Parse host, path, and optional port out of an https:// URL.
-// Signature: (url, host, path, port) — port defaults to 443 if not in URL.
-// Returns false if the URL doesn't start with https://.
-static bool parseHttpsUrl(const String& url, String& host, String& path, int& port) {
-  if (!url.startsWith("https://")) return false;
-  String rest = url.substring(8); // strip "https://"
-  int slash = rest.indexOf('/');
-  String hostPort = (slash >= 0) ? rest.substring(0, slash) : rest;
-  path = (slash >= 0) ? rest.substring(slash) : "/";
-  int colon = hostPort.indexOf(':');
-  if (colon >= 0) {
-    host = hostPort.substring(0, colon);
-    port = hostPort.substring(colon + 1).toInt();
-  } else {
-    host = hostPort;
-    port = 443;
-  }
-  return host.length() > 0;
-}
-
-// Follow a single HTTPS redirect (one hop only — GitHub release asset
-// browser_download_url always redirects once to objects.githubusercontent.com).
-// Returns the Location header value on a 3xx, the original url on 200,
-// or empty string on error.
-static String resolveRedirect(const String& url) {
-  String host, path;
-  int port = 443;
-  if (!parseHttpsUrl(url, host, path, port)) {
-    Serial.printf("[OTA] resolveRedirect: bad url: %s\n", url.c_str());
-    return "";
-  }
-
-  WiFiClientSecure client;
-  client.setCACertBundle(x509_crt_bundle_start,
-                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
-  client.setHandshakeTimeout(15);
-
-  if (!client.connect(host.c_str(), port, 10000)) {
-    Serial.printf("[OTA] resolveRedirect: connect failed to %s\n", host.c_str());
-    return "";
-  }
-
-  // HEAD request — avoids pulling the full binary just to get the redirect.
-  client.printf(
-    "HEAD %s HTTP/1.1\r\n"
-    "Host: %s\r\n"
-    "User-Agent: AmarNote/" FIRMWARE_VERSION "\r\n"
-    "Connection: close\r\n\r\n",
-    path.c_str(), host.c_str()
-  );
-
-  uint32_t deadline = millis() + 10000;
-  while (!client.available() && millis() < deadline) delay(20);
-
-  String location = "";
-  bool is3xx = false;
-  while (client.available() || (client.connected() && millis() < deadline)) {
-    if (!client.available()) { delay(5); continue; }
-    String line = client.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) break; // end of headers
-    if (line.startsWith("HTTP/")) {
-      int sp1 = line.indexOf(' ');
-      int sp2 = line.indexOf(' ', sp1 + 1);
-      int code = line.substring(sp1 + 1, sp2 > 0 ? sp2 : line.length()).toInt();
-      is3xx = (code >= 300 && code < 400);
-      if (code == 200) {
-        client.stop();
-        return url; // no redirect needed
-      }
-      if (!is3xx) {
-        Serial.printf("[OTA] resolveRedirect: unexpected status %d\n", code);
-        client.stop();
-        return "";
-      }
-    } else if (is3xx) {
-      if (line.startsWith("Location:") || line.startsWith("location:")) {
-        location = line.substring(line.indexOf(':') + 1);
-        location.trim();
-      }
-    }
-  }
-  client.stop();
-
-  if (location.length() > 0) {
-    Serial.printf("[OTA] resolved redirect -> %s\n", location.c_str());
-    return location;
-  }
-  Serial.println("[OTA] resolveRedirect: no Location header found");
-  return "";
-}
-
+// ─── otaCheckGithub ───────────────────────────────────────────────────────────────
 bool otaCheckGithub(String& latestTag, String& assetUrl) {
   const char* host = "api.github.com";
   String path = "/repos/" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "/releases/latest";
@@ -134,9 +44,8 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     return false;
   }
 
-  String authHeader = "";
   String tok = cfg::githubToken();
-  if (tok.length() > 0) authHeader = "Authorization: Bearer " + tok + "\r\n";
+  String authHeader = (tok.length() > 0) ? "Authorization: Bearer " + tok + "\r\n" : "";
 
   client.printf(
     "GET %s HTTP/1.1\r\n"
@@ -160,8 +69,7 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
       if (line == "\r" || line.length() == 0) inBody = true;
       if (line.startsWith("HTTP/") && line.indexOf(" 200 ") < 0) {
         Serial.printf("[OTA] GitHub API: %s\n", line.c_str());
-        client.stop();
-        return false;
+        client.stop(); return false;
       }
     } else {
       body += line;
@@ -170,50 +78,235 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
   }
   client.stop();
 
-  if (body.length() == 0) {
-    Serial.println("[OTA] empty response from GitHub");
-    return false;
-  }
+  if (body.length() == 0) { Serial.println("[OTA] empty GitHub response"); return false; }
 
   DynamicJsonDocument doc(8192);
-  DeserializationError err = deserializeJson(doc, body);
-  if (err) {
-    Serial.printf("[OTA] JSON parse error: %s\n", err.c_str());
-    return false;
-  }
+  if (deserializeJson(doc, body)) { Serial.println("[OTA] JSON parse error"); return false; }
 
   latestTag = doc["tag_name"] | "";
-  if (latestTag.length() == 0) {
-    Serial.println("[OTA] no tag_name in release");
-    return false;
-  }
+  if (latestTag.length() == 0) { Serial.println("[OTA] no tag_name"); return false; }
 
-  // Find first .bin asset — grab browser_download_url then resolve the redirect.
-  String redirectUrl = "";
+  // Return the API asset URL (NOT browser_download_url) so we can fetch it
+  // with Authorization + Accept: application/octet-stream headers.
   JsonArray assets = doc["assets"].as<JsonArray>();
   for (JsonObject asset : assets) {
     String name = asset["name"] | "";
     if (name.endsWith(".bin")) {
-      redirectUrl = asset["browser_download_url"] | "";
+      assetUrl = asset["url"] | "";  // api.github.com/repos/.../releases/assets/{id}
       break;
     }
   }
 
-  if (redirectUrl.length() == 0) {
+  if (assetUrl.length() == 0) {
     Serial.printf("[OTA] release %s has no .bin asset\n", latestTag.c_str());
     return false;
   }
 
-  // Resolve the GitHub redirect to the final objects.githubusercontent.com URL.
-  // HTTPUpdate does not follow redirects itself, so we must do it here.
-  assetUrl = resolveRedirect(redirectUrl);
-  if (assetUrl.length() == 0) {
-    Serial.printf("[OTA] could not resolve asset URL for %s\n", latestTag.c_str());
-    assetUrl = redirectUrl; // fall back to original
-  }
-
   Serial.printf("[OTA] latest=%s local=%s\n[OTA] asset=%s\n",
                 latestTag.c_str(), FIRMWARE_VERSION, assetUrl.c_str());
-
   return isNewer(latestTag, FIRMWARE_VERSION);
+}
+
+// ─── otaDownloadAndFlash ───────────────────────────────────────────────────────────
+//
+// Downloads firmware from the GitHub API asset URL using Authorization +
+// Accept: application/octet-stream (which causes the API to redirect to the
+// real binary and serve it inline in the same connection chain), then writes
+// each chunk directly into the inactive OTA partition via Update.h.
+// This approach is auth-aware and does not rely on HTTPUpdate at all.
+bool otaDownloadAndFlash(const String& apiAssetUrl,
+                         void (*progressCb)(size_t, size_t)) {
+  // Strip "https://api.github.com" prefix to get just the path.
+  const char* apiHost = "api.github.com";
+  String path = apiAssetUrl;
+  String pfx = "https://api.github.com";
+  if (path.startsWith(pfx)) path = path.substring(pfx.length());
+  if (path.length() == 0) path = "/";
+
+  String tok = cfg::githubToken();
+  if (tok.length() == 0) {
+    Serial.println("[OTA] no GitHub token — cannot authenticate asset download");
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setCACertBundle(x509_crt_bundle_start,
+                         (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+  client.setHandshakeTimeout(20);
+
+  Serial.printf("[OTA] connecting to %s\n", apiHost);
+  if (!client.connect(apiHost, 443, 20000)) {
+    Serial.println("[OTA] connect failed");
+    return false;
+  }
+
+  // The GitHub API will redirect us (302) to the actual CDN URL.
+  // We send the auth header so it issues a short-lived signed URL that
+  // belongs to our token rather than a browser session.
+  client.printf(
+    "GET %s HTTP/1.1\r\n"
+    "Host: %s\r\n"
+    "User-Agent: AmarNote/" FIRMWARE_VERSION "\r\n"
+    "Authorization: Bearer %s\r\n"
+    "Accept: application/octet-stream\r\n"
+    "Connection: close\r\n\r\n",
+    path.c_str(), apiHost, tok.c_str()
+  );
+
+  // ── Read response headers ──────────────────────────────────────────────────
+  uint32_t deadline = millis() + 20000;
+  while (!client.available() && millis() < deadline) delay(20);
+
+  int httpCode = 0;
+  size_t contentLength = 0;
+  bool chunked = false;
+  String location = "";
+
+  while (client.available() || (client.connected() && millis() < deadline)) {
+    if (!client.available()) { delay(5); continue; }
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break; // blank line = end of headers
+    if (line.startsWith("HTTP/")) {
+      int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
+      httpCode = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
+    } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
+      contentLength = (size_t)line.substring(line.indexOf(':') + 1).toInt();
+    } else if (line.startsWith("Transfer-Encoding:") && line.indexOf("chunked") >= 0) {
+      chunked = true;
+    } else if ((line.startsWith("Location:") || line.startsWith("location:")) && location.length() == 0) {
+      location = line.substring(line.indexOf(':') + 1);
+      location.trim();
+    }
+  }
+
+  Serial.printf("[OTA] HTTP %d  content-length=%u  chunked=%d\n",
+                httpCode, (unsigned)contentLength, (int)chunked);
+
+  // ── Follow one redirect if needed (302 to CDN) ───────────────────────────
+  if (httpCode >= 300 && httpCode < 400) {
+    client.stop();
+    if (location.length() == 0) {
+      Serial.println("[OTA] redirect with no Location"); return false;
+    }
+    Serial.printf("[OTA] following redirect to: %s\n", location.c_str());
+
+    // Parse host + path from the redirect Location.
+    String rHost, rPath;
+    int rPort = 443;
+    if (!location.startsWith("https://")) {
+      Serial.println("[OTA] non-HTTPS redirect"); return false;
+    }
+    String rest = location.substring(8);
+    int slash = rest.indexOf('/');
+    String hostPort = (slash >= 0) ? rest.substring(0, slash) : rest;
+    rPath = (slash >= 0) ? rest.substring(slash) : "/";
+    int colon = hostPort.indexOf(':');
+    if (colon >= 0) { rHost = hostPort.substring(0, colon); rPort = hostPort.substring(colon + 1).toInt(); }
+    else            { rHost = hostPort; }
+
+    WiFiClientSecure c2;
+    c2.setCACertBundle(x509_crt_bundle_start,
+                       (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+    c2.setHandshakeTimeout(20);
+    if (!c2.connect(rHost.c_str(), rPort, 20000)) {
+      Serial.printf("[OTA] redirect connect failed: %s\n", rHost.c_str()); return false;
+    }
+    // No auth header on CDN — the signed URL already carries the credentials.
+    c2.printf(
+      "GET %s HTTP/1.1\r\n"
+      "Host: %s\r\n"
+      "User-Agent: AmarNote/" FIRMWARE_VERSION "\r\n"
+      "Connection: close\r\n\r\n",
+      rPath.c_str(), rHost.c_str()
+    );
+
+    deadline = millis() + 20000;
+    while (!c2.available() && millis() < deadline) delay(20);
+
+    httpCode = 0; contentLength = 0; chunked = false;
+    while (c2.available() || (c2.connected() && millis() < deadline)) {
+      if (!c2.available()) { delay(5); continue; }
+      String line = c2.readStringUntil('\n'); line.trim();
+      if (line.length() == 0) break;
+      if (line.startsWith("HTTP/")) {
+        int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
+        httpCode = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
+      } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
+        contentLength = (size_t)line.substring(line.indexOf(':') + 1).toInt();
+      } else if (line.startsWith("Transfer-Encoding:") && line.indexOf("chunked") >= 0) {
+        chunked = true;
+      }
+    }
+    Serial.printf("[OTA] CDN HTTP %d  size=%u\n", httpCode, (unsigned)contentLength);
+    if (httpCode != 200) {
+      Serial.printf("[OTA] CDN error %d\n", httpCode); c2.stop(); return false;
+    }
+    if (contentLength == 0) {
+      Serial.println("[OTA] no content-length from CDN — cannot flash"); c2.stop(); return false;
+    }
+
+    // ── Flash from CDN connection ───────────────────────────────────────────
+    if (!Update.begin(contentLength, U_FLASH)) {
+      Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
+      c2.stop(); return false;
+    }
+    uint8_t buf[1024];
+    size_t written = 0;
+    deadline = millis() + 120000; // 2-min hard cap for the download
+    while (written < contentLength && (c2.available() || (c2.connected() && millis() < deadline))) {
+      if (!c2.available()) { delay(5); continue; }
+      int n = c2.read(buf, sizeof(buf));
+      if (n <= 0) continue;
+      if (Update.write(buf, n) != (size_t)n) {
+        Serial.printf("[OTA] write error: %s\n", Update.errorString());
+        Update.abort(); c2.stop(); return false;
+      }
+      written += n;
+      if (progressCb) progressCb(written, contentLength);
+    }
+    c2.stop();
+    if (!Update.end(true)) {
+      Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
+      return false;
+    }
+    Serial.printf("[OTA] flash complete (%u bytes)\n", (unsigned)written);
+    return true;
+  }
+
+  // ── No redirect — 200 directly (unlikely but handle it) ─────────────────
+  if (httpCode != 200) {
+    Serial.printf("[OTA] unexpected HTTP %d from API\n", httpCode);
+    client.stop(); return false;
+  }
+  if (contentLength == 0) {
+    Serial.println("[OTA] no content-length — cannot flash");
+    client.stop(); return false;
+  }
+
+  if (!Update.begin(contentLength, U_FLASH)) {
+    Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
+    client.stop(); return false;
+  }
+  uint8_t buf[1024];
+  size_t written = 0;
+  deadline = millis() + 120000;
+  while (written < contentLength && (client.available() || (client.connected() && millis() < deadline))) {
+    if (!client.available()) { delay(5); continue; }
+    int n = client.read(buf, sizeof(buf));
+    if (n <= 0) continue;
+    if (Update.write(buf, n) != (size_t)n) {
+      Serial.printf("[OTA] write error: %s\n", Update.errorString());
+      Update.abort(); client.stop(); return false;
+    }
+    written += n;
+    if (progressCb) progressCb(written, contentLength);
+  }
+  client.stop();
+  if (!Update.end(true)) {
+    Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
+    return false;
+  }
+  Serial.printf("[OTA] flash complete (%u bytes)\n", (unsigned)written);
+  return true;
 }
