@@ -1,6 +1,6 @@
 # Amar Note — Arduino firmware CI + release builder
 #
-# On every push to main:        compiles the firmware (smoke-test only)
+# On every push to any branch:  compiles the firmware (smoke-test)
 # On every tag push (v*.*.*):   compiles + creates a GitHub Release with
 #                               the .bin attached as a release asset.
 #
@@ -12,10 +12,10 @@ name: Build Firmware
 
 on:
   push:
-    branches: [ main ]
+    branches: [ '**' ]   # all branches — smoke-test every push
     tags:     [ 'v*.*.*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ '**' ]
 
 jobs:
   build:
