@@ -276,6 +276,11 @@ String portalCss() {
     ".ver-item{font-size:13px}"
     ".ver-arrow{color:#6a665f;font-size:16px}"
 
+    // ── OTA progress bar (shown on /ota/run page)
+    ".ota-bar-wrap{background:#e6e3dc;border-radius:999px;overflow:hidden;height:14px;margin:18px 0 6px}"
+    ".ota-bar{height:100%;background:#111;border-radius:999px;width:0%;transition:width .4s ease}"
+    ".ota-stage{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:#6a665f}"
+
     // ── Responsive
     "@media(max-width:520px){"
     "body{padding:0 0 32px}"
@@ -822,11 +827,6 @@ void handleProvisionSave() {
 }
 
 // ─── /ota/check ──────────────────────────────────────────────────────────────
-// Called by the "Check GitHub" button. Queries the GitHub releases API,
-// then redirects back to /ota with result query params:
-//   ?update=1&tag=vX.Y.Z&url=<encoded>   — update available
-//   ?uptodate=1                           — already on latest
-//   ?err=1                                — network / API failure
 void handleOtaCheck() {
   if (WiFi.status() != WL_CONNECTED) {
     transferServer.sendHeader("Location", "/ota?err=1");
@@ -836,7 +836,6 @@ void handleOtaCheck() {
   String latestTag, assetUrl;
   bool newer = otaCheckGithub(latestTag, assetUrl);
   if (latestTag.length() == 0) {
-    // network error or no release found
     transferServer.sendHeader("Location", "/ota?err=1");
     transferServer.send(303);
     return;
@@ -846,7 +845,6 @@ void handleOtaCheck() {
     transferServer.send(303);
     return;
   }
-  // URL-encode the asset URL so it survives the redirect query string
   String enc = "";
   for (int i = 0; i < (int)assetUrl.length(); i++) {
     char c = assetUrl[i];
@@ -863,7 +861,6 @@ void handleOtaCheck() {
 
 // ─── /ota ────────────────────────────────────────────────────────────────────
 void handleOtaPage() {
-  // Read result params from a prior /ota/check redirect
   bool hasUpdate  = transferServer.hasArg("update")   && transferServer.arg("update")   == "1";
   bool upToDate   = transferServer.hasArg("uptodate") && transferServer.arg("uptodate") == "1";
   bool checkErr   = transferServer.hasArg("err")      && transferServer.arg("err")      == "1";
@@ -879,11 +876,9 @@ void handleOtaPage() {
   html += "<div class='page-title'>update</div>";
   html += "<div class='page-sub'>firmware " FW_VERSION "</div>";
 
-  // ── GitHub check card
   html += "<div class='card'>";
   html += "<div class='card-title'>github release check</div>";
 
-  // Status banner (shown after a check)
   if (hasUpdate) {
     html += "<div class='ver-banner'>";
     html += "<span class='ver-item'>current &nbsp;<strong>" FW_VERSION "</strong></span>";
@@ -907,7 +902,6 @@ void handleOtaPage() {
   html += "<a class='btn primary' href='/ota/check'>Check GitHub</a>";
   html += "</div>";
 
-  // ── Flash card
   html += "<div class='card'>";
   html += "<div class='card-title'>over-the-air flash</div>";
   html += "<p class='hint' style='margin-bottom:14px'>Paste an HTTPS URL to a compiled <code>.bin</code> firmware file, or use the pre-filled URL from the check above. "
@@ -928,18 +922,102 @@ void handleOtaPage() {
   transferServer.send(200, "text/html", html);
 }
 
+// ─── /ota/run (POST) ─────────────────────────────────────────────────────────
+// Sends an immediate browser response with a live progress bar (SSE-style
+// keep-alive via chunked transfer), then wires HTTPUpdate callbacks so the
+// e-paper display shows download / flash / reboot stages with a ≥5% gate
+// on partial refreshes to avoid hammering the slow panel.
 void handleOtaRun() {
   if (!transferServer.hasArg("url") || transferServer.arg("url").length() == 0) {
     transferServer.send(400, "text/plain", "Missing url"); return;
   }
   String url = transferServer.arg("url");
+
+  // ── Send browser page immediately (device blocks during httpUpdate.update)
   transferServer.send(200, "text/html",
-    "<!doctype html><meta charset='utf-8'>"
-    "<style>body{font-family:-apple-system,sans-serif;padding:40px;background:#f3f0e9;color:#111}</style>"
-    "<h1 style='font-size:36px;font-weight:800;letter-spacing:-.04em;margin-bottom:16px'>Updating&hellip;</h1>"
-    "<p>Flashing firmware. The device reboots automatically if the update succeeds. "
-    "If it fails, it stays on the current version &mdash; reopen Transfer and retry.</p>");
+    "<!doctype html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Amar Note &middot; Updating&hellip;</title>"
+    + portalCss() +
+    "</head><body>"
+    "<div class='header'>"
+    "<span class='header-brand'>amar note</span>"
+    "</div>"
+    "<div class='wrap' style='padding-top:32px'>"
+    "<div class='page-title'>updating&hellip;</div>"
+    "<div class='page-sub'>do not close this page</div>"
+    "<div class='card'>"
+    "<div class='card-title'>flashing firmware</div>"
+    "<div class='ota-bar-wrap'><div class='ota-bar' id='bar'></div></div>"
+    "<div class='ota-stage' id='stage'>connecting&hellip;</div>"
+    "<p class='hint' style='margin-top:16px'>"
+    "Watch the device screen for live progress. "
+    "The device reboots automatically when done &mdash; "
+    "if it fails it stays on the current version.</p>"
+    "</div></div>"
+    // Poll /api/ota-progress every 1 s and update the bar
+    "<script>"
+    "(function(){"
+    "var bar=document.getElementById('bar');"
+    "var stage=document.getElementById('stage');"
+    "function poll(){"
+    "fetch('/api/ota-progress').then(function(r){return r.json();}).then(function(d){"
+    "bar.style.width=d.pct+'%';"
+    "stage.textContent=d.stage||'';"
+    "if(d.pct<100)setTimeout(poll,1000);"
+    "}).catch(function(){setTimeout(poll,2000);});}"
+    "setTimeout(poll,1000);"
+    "})();"
+    "</script>"
+    "</body></html>");
   delay(250);
+
+  // ── State shared between callbacks (stack-safe: small ints + const ptr)
+  static int    s_lastPct  = -1;
+  static int    s_totalKb  = 0;
+  s_lastPct = -1;
+  s_totalKb = 0;
+
+  // Expose progress to /api/ota-progress polls
+  extern volatile int   g_otaPct;
+  extern volatile const char* g_otaStage;
+  g_otaPct   = 0;
+  g_otaStage = "connecting";
+
+  // ── onStart: show blank bar at 0%
+  httpUpdate.onStart([]() {
+    g_otaPct   = 0;
+    g_otaStage = "downloading";
+    showOtaProgress(0, "downloading");
+    Serial.println("[OTA] start");
+  });
+
+  // ── onProgress: gate redraws to every >=5% change
+  httpUpdate.onProgress([](int current, int total) {
+    int pct = (total > 0) ? constrain((current * 100) / total, 0, 99) : 0;
+    g_otaPct = pct;
+    if (pct >= s_lastPct + 5 || pct == 0) {
+      s_lastPct = pct;
+      showOtaProgress(pct, "downloading");
+      Serial.printf("[OTA] progress %d%%\n", pct);
+    }
+  });
+
+  // ── onEnd: flash complete, show 100% before reboot
+  httpUpdate.onEnd([]() {
+    g_otaPct   = 100;
+    g_otaStage = "rebooting";
+    showOtaProgress(100, "rebooting");
+    Serial.println("[OTA] done — rebooting");
+  });
+
+  // ── onError: show error screen
+  httpUpdate.onError([](int err) {
+    g_otaPct   = 0;
+    g_otaStage = "failed";
+    showError("ota failed");
+    Serial.printf("[OTA] error %d: %s\n", err, httpUpdate.getLastErrorString().c_str());
+  });
 
   WiFiClientSecure client;
   client.setCACertBundle(x509_crt_bundle_start,
@@ -953,10 +1031,26 @@ void handleOtaRun() {
     Serial.println("[OTA] no update available");
 }
 
+// ─── /api/ota-progress ───────────────────────────────────────────────────────
+// Polled by the browser page while httpUpdate.update() is blocking.
+volatile int          g_otaPct   = 0;
+volatile const char*  g_otaStage = "idle";
+
+void handleOtaProgressApi() {
+  String json = "{\"pct\":";
+  json += String((int)g_otaPct);
+  json += ",\"stage\":\"";
+  json += String((const char*)g_otaStage);
+  json += "\"}";
+  transferServer.sendHeader("Cache-Control", "no-cache");
+  transferServer.send(200, "application/json", json);
+}
+
 // ─── Server setup ─────────────────────────────────────────────────────────────
 void setupTransferServer() {
   transferServer.on("/",                HTTP_GET,  handlePortalRoot);
   transferServer.on("/api/status",      HTTP_GET,  handleApiStatus);
+  transferServer.on("/api/ota-progress",HTTP_GET,  handleOtaProgressApi);
   transferServer.on("/provision",       HTTP_GET,  handleProvisionPage);
   transferServer.on("/provision/save",  HTTP_POST, handleProvisionSave);
   transferServer.on("/ota",             HTTP_GET,  handleOtaPage);
