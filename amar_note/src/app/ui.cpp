@@ -112,12 +112,10 @@ void iconUsbDrive(int cx, int cy) {
 // ── Menu tile icon: circular sync arrows (small, centred in tile) ──────────────────
 static void iconSyncSmall(int cx, int cy, uint8_t col) {
   strokeCircle(cx, cy, 12, 2, col);
-  // Top-right arrow head pointing clockwise
-  fillRect(cx+7, cy-14, 7, 7, col == WHITE ? BLACK : WHITE);  // erase arc segment
+  fillRect(cx+7, cy-14, 7, 7, col == WHITE ? BLACK : WHITE);
   thickLine(cx+7,  cy-12, cx+13, cy-12, 2, col);
   thickLine(cx+13, cy-12, cx+9,  cy-17, 2, col);
   thickLine(cx+13, cy-12, cx+9,  cy-7,  2, col);
-  // Bottom-left arrow head pointing clockwise
   fillRect(cx-14, cy+7, 7, 7, col == WHITE ? BLACK : WHITE);
   thickLine(cx-13, cy+12, cx-7,  cy+12, 2, col);
   thickLine(cx-7,  cy+12, cx-11, cy+17, 2, col);
@@ -126,11 +124,9 @@ static void iconSyncSmall(int cx, int cy, uint8_t col) {
 
 // ── Menu tile icon: gear / cog (Settings) ──────────────────────────────────
 static void iconGear(int cx, int cy, uint8_t col) {
-  // Outer ring with 6 teeth
   strokeCircle(cx, cy, 12, 2, col);
-  fillCircle(cx, cy, 5, col);              // hub
-  strokeCircle(cx, cy, 5, 2, col == WHITE ? BLACK : WHITE);  // hub hole
-  // 6 teeth at 0, 60, 120, 180, 240, 300 degrees
+  fillCircle(cx, cy, 5, col);
+  strokeCircle(cx, cy, 5, 2, col == WHITE ? BLACK : WHITE);
   const int toothLen = 5;
   const float angles[6] = {0.0f, 1.047f, 2.094f, 3.141f, 4.189f, 5.236f};
   for (int i = 0; i < 6; i++) {
@@ -145,36 +141,24 @@ static void iconGear(int cx, int cy, uint8_t col) {
 
 // ── Menu tile icon: USB trident / plug ───────────────────────────────────────
 static void iconUsbPlug(int cx, int cy, uint8_t col) {
-  // Connector body
   strokeRoundRect(cx-9, cy-4, 18, 12, 3, 2, col);
-  // Cable stem
   fillRect(cx-2, cy+8, 4, 8, col);
-  // Trident: vertical stem + 3 prongs
-  fillRect(cx-1, cy-14, 3, 10, col);  // stem
-  // Left prong
+  fillRect(cx-1, cy-14, 3, 10, col);
   thickLine(cx-6, cy-14, cx-6, cy-9, 2, col);
   thickLine(cx-6, cy-14, cx-1, cy-14, 2, col);
-  // Right prong
   thickLine(cx+6, cy-14, cx+6, cy-9, 2, col);
   thickLine(cx+6, cy-14, cx+1, cy-14, 2, col);
-  // Top dot
   fillCircle(cx, cy-17, 2, col);
 }
 
 // ── Menu tile icon: cute cat face (Tamagotchi) ─────────────────────────────────
 static void iconCatFace(int cx, int cy, uint8_t col) {
-  // Head
   strokeCircle(cx, cy+2, 13, 2, col);
-  // Left ear (triangle: filled)
   fillTriangle(cx-13, cy-8,  cx-6,  cy-8,  cx-10, cy-18, col);
-  // Right ear
   fillTriangle(cx+13, cy-8,  cx+6,  cy-8,  cx+10, cy-18, col);
-  // Eyes
   fillCircle(cx-5, cy,   2, col);
   fillCircle(cx+5, cy,   2, col);
-  // Nose dot
   fillCircle(cx,   cy+4, 1, col);
-  // W-mouth
   thickLine(cx-5, cy+6, cx-2, cy+9,  2, col);
   thickLine(cx-2, cy+9, cx,   cy+7,  2, col);
   thickLine(cx,   cy+7, cx+2, cy+9,  2, col);
@@ -741,8 +725,8 @@ void showSettings(int cursor) {
   drawStr(16, 14, "settings", 1, BLACK);
   hline(16, 32, W-32, BLACK);
 
-  // 7 rows × 24px step, starting at y=38 → last row bottom at 38+6×24+22 = 204 (fits tight)
-  const int y0 = 38, step = 24, boxH = 22;
+  // 6 rows × 28px step, starting at y=36 → matches original pre-7-row spacing
+  const int y0 = 36, step = 28, boxH = 24;
 
   for (int row = 0; row < SETTINGS_COUNT; row++) {
     bool active = (row == cursor);
@@ -753,34 +737,30 @@ void showSettings(int cursor) {
 
     switch (row) {
       case 0:
-        drawStr(28, y + 6, "sounds", 1, col);
-        drawStr(W - 70, y + 6, amarSoundIsEnabled() ? "on" : "off", 1, col);
+        drawStr(28, y + 7, "sounds", 1, col);
+        drawStr(W - 70, y + 7, amarSoundIsEnabled() ? "on" : "off", 1, col);
         break;
       case 1:
-        drawStr(28, y + 6, "transfer", 1, col);
+        drawStr(28, y + 7, "transfer", 1, col);
         break;
       case 2:
-        drawStr(28, y + 6, "device", 1, col);
+        drawStr(28, y + 7, "device", 1, col);
         break;
       case 3:
-        drawStr(28, y + 6, "erase all", 1, col);
+        drawStr(28, y + 7, "idle rec", 1, col);
+        drawStr(W - 70, y + 7, cfg::idleTouchRecord() ? "on" : "off", 1, col);
         break;
-      case 4:
-        drawStr(28, y + 6, "idle rec", 1, col);
-        drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
-        break;
-      case 5: {
-        // min rec: off / 1s / 2s / 3s / 5s
-        drawStr(28, y + 6, "min rec", 1, col);
+      case 4: {
+        drawStr(28, y + 7, "min rec", 1, col);
         uint8_t mr = cfg::minRecSecs();
         char mrBuf[8];
         if (mr == 0) snprintf(mrBuf, sizeof(mrBuf), "off");
         else         snprintf(mrBuf, sizeof(mrBuf), "%ds", (int)mr);
-        drawStr(W - 70, y + 6, mrBuf, 1, col);
+        drawStr(W - 70, y + 7, mrBuf, 1, col);
         break;
       }
-      case 6:
-        drawStr(28, y + 6, "reset", 1, col);
+      case 5:
+        drawStr(28, y + 7, "reset", 1, col);
         break;
       default:
         break;
@@ -807,30 +787,29 @@ void showDeviceInfo() {
 // ─── Reset sub-screen: 5 modern pills ────────────────────────────────────────────────────────
 //
 // Pills (cursor 0–4):
-//   0 WiFi   1 Keys
-//   2 All    3 Sounds
-//        4 Cancel
+//   0 Reset WiFi     1 Clear Keys
+//   2 Erase Notes    3 Erase Notes+Vault
+//        4 Factory Reset
 //
-// rec cycles forward; pwr goes back to settings.
 void showResetMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "reset", 1, BLACK);
   hline(16, 26, W-32, BLACK);
 
   const int pillW = 82, pillH = 34, gap = 8;
-  const int col0x = 10,  col1x = col0x + pillW + gap;  // two-column layout
+  const int col0x = 10,  col1x = col0x + pillW + gap;
   const int row0y = 38,  row1y = row0y + pillH + gap;
-  const int cancelW = 100, cancelX = (W - cancelW) / 2;
+  const int cancelW = 160, cancelX = (W - cancelW) / 2;
   const int cancelY = row1y + pillH + gap;
 
-  // Row 0: WiFi | Keys
-  drawModernPill(col0x, row0y, pillW, pillH, "WiFi",   cursor == 0);
-  drawModernPill(col1x, row0y, pillW, pillH, "Keys",   cursor == 1);
-  // Row 1: All | Sounds
-  drawModernPill(col0x, row1y, pillW, pillH, "All",    cursor == 2);
-  drawModernPill(col1x, row1y, pillW, pillH, "Sounds", cursor == 3);
-  // Row 2 (centred): Cancel
-  drawModernPill(cancelX, cancelY, cancelW, pillH, "Cancel", cursor == 4);
+  // Row 0: Reset WiFi | Clear Keys
+  drawModernPill(col0x, row0y, pillW, pillH, "Reset WiFi",  cursor == 0);
+  drawModernPill(col1x, row0y, pillW, pillH, "Clear Keys",  cursor == 1);
+  // Row 1: Erase Notes | Erase Notes+Vault
+  drawModernPill(col0x, row1y, pillW, pillH, "Erase Notes",      cursor == 2);
+  drawModernPill(col1x, row1y, pillW, pillH, "Notes+Vault",      cursor == 3);
+  // Row 2 (centred, wide): Factory Reset
+  drawModernPill(cancelX, cancelY, cancelW, pillH, "Factory Reset", cursor == 4);
 
   hline(0, 179, W, BLACK);
   fillRect(0, 180, W, 20, WHITE);
@@ -855,11 +834,11 @@ void showResetWifiConfirm() {
 void showResetConfirm() {
   clearWhite();
   drawKicker("factory reset", 18);
-  drawStrC(100, 64,  "clear wifi + all keys?", 1, BLACK);
-  drawStrC(100, 86,  "notes are kept", 1, BLACK);
-  hline(20, 110, W - 40, BLACK);
-  drawStrC(100, 134, "rec = erase", 1, BLACK);
-  drawStrC(100, 156, "pwr = cancel", 1, BLACK);
+  drawStrC(100, 60,  "wipe wifi + all keys?", 1, BLACK);
+  drawStrC(100, 82,  "notes are kept", 1, BLACK);
+  hline(20, 106, W - 40, BLACK);
+  drawStrC(100, 130, "rec = erase", 1, BLACK);
+  drawStrC(100, 152, "pwr = cancel", 1, BLACK);
   refresh();
 }
 
@@ -874,11 +853,11 @@ void showResetDone() {
 void showDeleteAllConfirm(int count, int cursor) {
   clearWhite();
   fillRect(0, 0, W, 26, BLACK);
-  drawStrC(W/2, 9, "ERASE ALL", 1, WHITE);
+  drawStrC(W/2, 9, "ERASE NOTES", 1, WHITE);
   char label[20]; snprintf(label, sizeof(label), "%d notes", count);
   drawStrC(W/2, 40, label, 2, BLACK);
 
-  const char* opts[2] = { "Device only", "Device + GitHub" };
+  const char* opts[2] = { "Erase Notes", "Erase Notes + Vault" };
   const int y0 = 76, step = 34, boxH = 28;
   for (int i = 0; i < 2; i++) {
     bool active = (i == cursor);

@@ -107,9 +107,9 @@
 // and corresponding input handler in amar_note.ino.
 //
 // Rows (0-based):
-//   0 Sounds | 1 Transfer | 2 Device | 3 Erase All | 4 Idle Rec | 5 Min Rec | 6 Reset
+//   0 Sounds | 1 Transfer | 2 Device | 3 Idle Rec | 4 Min Rec | 5 Reset
 //
-#define SETTINGS_COUNT  7
+#define SETTINGS_COUNT  6
 
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
 #define FIRMWARE_VERSION  "v1.0"
