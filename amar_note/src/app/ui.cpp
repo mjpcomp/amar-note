@@ -725,7 +725,6 @@ void showSettings(int cursor) {
   drawStr(16, 14, "settings", 1, BLACK);
   hline(16, 32, W-32, BLACK);
 
-  // 6 rows × 28px step, starting at y=36 → matches original pre-7-row spacing
   const int y0 = 36, step = 28, boxH = 24;
 
   for (int row = 0; row < SETTINGS_COUNT; row++) {
@@ -788,7 +787,7 @@ void showDeviceInfo() {
 //
 // Pills (cursor 0–4):
 //   0 Rst WiFi    1 Clr Keys
-//   2 Notes       3 Notes+Vault
+//   2 Notes       3 +Vault
 //        4 Factory Reset
 //
 void showResetMenu(int cursor) {
@@ -805,9 +804,9 @@ void showResetMenu(int cursor) {
   // Row 0: Rst WiFi | Clr Keys
   drawModernPill(col0x, row0y, pillW, pillH, "Rst WiFi",  cursor == 0);
   drawModernPill(col1x, row0y, pillW, pillH, "Clr Keys",  cursor == 1);
-  // Row 1: Notes | Notes+Vault
-  drawModernPill(col0x, row1y, pillW, pillH, "Notes",       cursor == 2);
-  drawModernPill(col1x, row1y, pillW, pillH, "Notes+Vault", cursor == 3);
+  // Row 1: Notes | +Vault
+  drawModernPill(col0x, row1y, pillW, pillH, "Notes",   cursor == 2);
+  drawModernPill(col1x, row1y, pillW, pillH, "+Vault",  cursor == 3);
   // Row 2 (centred, wide): Factory Reset
   drawModernPill(cancelX, cancelY, cancelW, pillH, "Factory Reset", cursor == 4);
 
