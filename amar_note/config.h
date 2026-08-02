@@ -112,8 +112,12 @@
 #define SETTINGS_COUNT  6
 
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
-#define FIRMWARE_VERSION  "v1.0"
+#define FIRMWARE_VERSION  "v1.5.0"
 #define FW_VERSION        FIRMWARE_VERSION
+
+/* OTA update source — GitHub releases for this repo */
+#define OTA_GITHUB_OWNER  "mjpcomp"
+#define OTA_GITHUB_REPO   "amar-note"
 
 /* ── Nekogotchi (virtual pet) ──────────────────────────────────────────────── */
 /* SD save file */

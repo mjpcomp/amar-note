@@ -1,0 +1,102 @@
+# Amar Note — Arduino firmware CI + release builder
+#
+# On every push to main:        compiles the firmware (smoke-test only)
+# On every tag push (v*.*.*):   compiles + creates a GitHub Release with
+#                               the .bin attached as a release asset.
+#
+# The on-device OTA check hits:
+#   GET api.github.com/repos/mjpcomp/amar-note/releases/latest
+# and looks for the first .bin asset — exactly what this workflow produces.
+
+name: Build Firmware
+
+on:
+  push:
+    branches: [ main ]
+    tags:     [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Install arduino-cli ─────────────────────────────────────────────
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      # ── 3. Configure arduino-cli for ESP32 ────────────────────────────────
+      - name: Configure arduino-cli
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      # ── 4. Install ESP32 Arduino core (3.x) ───────────────────────────────
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.0.7
+
+      # ── 5. Install required libraries ─────────────────────────────────────
+      - name: Install libraries
+        run: |
+          arduino-cli lib install \
+            "ArduinoJson@7.3.1" \
+            "WebServer" \
+            "HTTPUpdate" \
+            "SD" \
+            "FS"
+          # Note: ESP32-specific libs (WiFiClientSecure, USBMSC, etc.) ship
+          # with the esp32:esp32 core and do not need separate installation.
+
+      # ── 6. Create secrets.h stub (CI build — no real keys needed) ─────────
+      - name: Create secrets.h stub
+        run: |
+          cat > amar_note/secrets.h << 'EOF'
+          // CI stub — no real secrets; firmware uses NVS at runtime
+          #pragma once
+          EOF
+
+      # ── 7. Compile ─────────────────────────────────────────────────────────
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PartitionScheme=custom \
+            --build-property build.partitions=partitions \
+            --export-binaries \
+            amar_note/amar_note.ino
+
+      # ── 8. Rename .bin for clarity ─────────────────────────────────────────
+      - name: Rename binary
+        run: |
+          # arduino-cli exports to amar_note/build/<fqbn>/
+          BIN=$(find amar_note/build -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -1)
+          echo "Found binary: $BIN"
+          cp "$BIN" amar-note-firmware.bin
+
+      # ── 9. Upload artifact (every build) ──────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amar-note-firmware
+          path: amar-note-firmware.bin
+          retention-days: 30
+
+      # ── 10. Create GitHub Release (tag pushes only) ────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: amar-note-firmware.bin
+          generate_release_notes: true
+          name: "Amar Note ${{ github.ref_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
