@@ -26,26 +26,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Install arduino-cli ─────────────────────────────────────────────
-      - name: Install arduino-cli
+      # ── 2. Install + configure arduino-cli ──────────────────────────────
+      # Install and configure in one step so the binary is on PATH immediately.
+      - name: Install and configure arduino-cli
         run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          echo "$HOME/bin" >> $GITHUB_PATH
-
-      # ── 3. Configure arduino-cli for ESP32 ────────────────────────────────
-      - name: Configure arduino-cli
-        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
           arduino-cli config init
           arduino-cli config add board_manager.additional_urls \
             https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 
-      # ── 4. Install ESP32 Arduino core (3.x) ───────────────────────────────
+      # ── 3. Install ESP32 Arduino core (3.x) ───────────────────────────────
       - name: Install ESP32 core
         run: |
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.0.7
 
-      # ── 5. Install required libraries ─────────────────────────────────────
+      # ── 4. Install required libraries ─────────────────────────────────────
       - name: Install libraries
         run: |
           arduino-cli lib install \
@@ -57,7 +53,7 @@ jobs:
           # Note: ESP32-specific libs (WiFiClientSecure, USBMSC, etc.) ship
           # with the esp32:esp32 core and do not need separate installation.
 
-      # ── 6. Create secrets.h stub (CI build — no real keys needed) ─────────
+      # ── 5. Create secrets.h stub (CI build — no real keys needed) ─────────
       - name: Create secrets.h stub
         run: |
           cat > amar_note/secrets.h << 'EOF'
@@ -65,7 +61,7 @@ jobs:
           #pragma once
           EOF
 
-      # ── 7. Compile ─────────────────────────────────────────────────────────
+      # ── 6. Compile ─────────────────────────────────────────────────────────
       - name: Compile firmware
         run: |
           arduino-cli compile \
@@ -74,15 +70,14 @@ jobs:
             --export-binaries \
             amar_note/amar_note.ino
 
-      # ── 8. Rename .bin for clarity ─────────────────────────────────────────
+      # ── 7. Rename .bin for clarity ─────────────────────────────────────────
       - name: Rename binary
         run: |
-          # arduino-cli exports to amar_note/build/<fqbn>/
           BIN=$(find amar_note/build -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -1)
           echo "Found binary: $BIN"
           cp "$BIN" amar-note-firmware.bin
 
-      # ── 9. Upload artifact (every build) ──────────────────────────────────
+      # ── 8. Upload artifact (every build) ──────────────────────────────────
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -90,7 +85,7 @@ jobs:
           path: amar-note-firmware.bin
           retention-days: 30
 
-      # ── 10. Create GitHub Release (tag pushes only) ────────────────────────
+      # ── 9. Create GitHub Release (tag pushes only) ────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
