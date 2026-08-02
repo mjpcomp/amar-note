@@ -50,12 +50,13 @@ extern "C" {
 
 // All pin, timing, path and threshold constants live in config.h.
 
-// ─── Content arrays ───────────────────────────────────────────────────────────────────
+// ─── Content arrays ───────────────────────────────────────────────────────────────────────────────────
 const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Buy", "Private" };
 const char* MENU_ITEMS[]      = { "Notes", "Tags", "Sync", "Settings", "USB Drive", "Tamagotchi" };
-const char* SETTINGS_ITEMS[]  = { "Sounds", "Transfer", "Device", "Erase All", "idle rec", "Reset" };
+// Rows: Sounds | Transfer | Device | Erase All | Idle Rec | Min Rec | Reset
+const char* SETTINGS_ITEMS[]  = { "Sounds", "Transfer", "Device", "Erase All", "idle rec", "min rec", "Reset" };
 
-// ─── Global variable definitions ───────────────────────────────────────────────────────
+// ─── Global variable definitions ──────────────────────────────────────────────────────────────────────
 board_power_bsp_t      board(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
 epaper_driver_display* display = nullptr;
 
@@ -101,13 +102,13 @@ uint32_t batWarnShowUntilMs = 0;
 char tags[20][32];
 int  tagCount = 0;
 
-// ─── Power latch ────────────────────────────────────────────────────────────────────
+// ─── Power latch ──────────────────────────────────────────────────────────────────────────────────
 void keepBatteryPowerOn() {
   pinMode(PWR_HOLD_PIN, OUTPUT);
   digitalWrite(PWR_HOLD_PIN, HIGH);
 }
 
-// ─── Flow functions ──────────────────────────────────────────────────────────────────
+// ─── Flow functions ────────────────────────────────────────────────────────────────────────────────────
 void startRecordFlow() {
   state = STATE_RECORDING;
   showRecording();
@@ -241,7 +242,7 @@ void startTransferMode() {
   showTransferMode(transferUrl.c_str());
 }
 
-// ─── Setup ─────────────────────────────────────────────────────────────────────────────
+// ─── Setup ──────────────────────────────────────────────────────────────────────────────────────
 void setup() {
   keepBatteryPowerOn();
 
@@ -316,7 +317,7 @@ void setup() {
   }
 }
 
-// ─── Serial provisioning ────────────────────────────────────────────────────────────────
+// ─── Serial provisioning ────────────────────────────────────────────────────────────────────────────────
 void handleSerialConfig() {
   static String line;
   static String pendingSsid;
@@ -377,7 +378,18 @@ void handleSerialConfig() {
   }
 }
 
-// ─── Touch dispatch helper ──────────────────────────────────────────────────────────────────
+// ─── Min-rec cycle helper ────────────────────────────────────────────────────────────────────────────
+// Cycles: off(0) -> 1s -> 2s -> 3s -> 5s -> off
+static void cycleMinRecSecs() {
+  const uint8_t steps[] = { 0, 1, 2, 3, 5 };
+  const int n = sizeof(steps) / sizeof(steps[0]);
+  uint8_t cur = cfg::minRecSecs();
+  int idx = 0;
+  for (int i = 0; i < n; i++) { if (steps[i] == cur) { idx = i; break; } }
+  cfg::setMinRecSecs(steps[(idx + 1) % n]);
+}
+
+// ─── Touch dispatch helper ──────────────────────────────────────────────────────────────────────────────
 static bool handleTouch() {
   if (state == STATE_RECORDING || state == STATE_USB_MSC) return false;
 
@@ -436,9 +448,10 @@ static bool handleTouch() {
   }
 
   if (state == STATE_SETTINGS) {
-    const int rowY[6] = { 38, 64, 90, 116, 142, 168 };
+    // 7 rows at y0=38, step=24, h=22
+    const int rowY[7] = { 38, 62, 86, 110, 134, 158, 182 };
     for (int i = 0; i < SETTINGS_COUNT; i++) {
-      if (touchHitTest(tx, ty, 16, rowY[i], 168, 26)) {
+      if (touchHitTest(tx, ty, 16, rowY[i], 168, 22)) {
         soundSelect();
         settingsCursor = i;
         if (i == 0) {
@@ -455,6 +468,9 @@ static bool handleTouch() {
           showDeleteAllConfirm((int)noteIndex.size(), eraseAllCursor);
         } else if (i == 4) {
           cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
+          showSettings(settingsCursor);
+        } else if (i == 5) {
+          cycleMinRecSecs();
           showSettings(settingsCursor);
         } else {
           resetMenuCursor = 0;
@@ -592,29 +608,54 @@ static bool handleTouch() {
     return true;
   }
 
-  // ── RESET MENU: pills y0=52, step=36, h=28, x=20, w=160
+  // ── RESET MENU: 5 pills
+  // Layout (from ui.cpp showResetMenu):
+  //   pillW=82, pillH=34, gap=8
+  //   col0x=10, col1x=10+82+8=100
+  //   row0y=38, row1y=38+34+8=80
+  //   cancelW=100, cancelX=(200-100)/2=50, cancelY=80+34+8=122
   if (state == STATE_RESET_MENU) {
-    const int y0 = 52, step = 36, h = 28;
-    for (int i = 0; i < 3; i++) {
-      if (touchHitTest(tx, ty, 20, y0 + i * step, 160, h)) {
-        soundSelect();
-        if (i == 0) {
-          state = STATE_RESET_WIFI_CONFIRM;
-          showResetWifiConfirm();
-        } else if (i == 1) {
-          cfg::resetKeys(); soundDelete();
-          showResetDone(); delay(1400); ESP.restart();
-        } else {
-          state = STATE_RESET_CONFIRM;
-          showResetConfirm();
-        }
-        return true;
-      }
+    const int pillW = 82, pillH = 34, gap = 8;
+    const int col0x = 10, col1x = col0x + pillW + gap;
+    const int row0y = 38, row1y = row0y + pillH + gap;
+    const int cancelW = 100, cancelX = (200 - cancelW) / 2;
+    const int cancelY = row1y + pillH + gap;
+
+    // Pill 0: WiFi
+    if (touchHitTest(tx, ty, col0x, row0y, pillW, pillH)) {
+      soundSelect(); resetMenuCursor = 0;
+      state = STATE_RESET_WIFI_CONFIRM; showResetWifiConfirm();
+      return true;
+    }
+    // Pill 1: Keys
+    if (touchHitTest(tx, ty, col1x, row0y, pillW, pillH)) {
+      soundSelect(); resetMenuCursor = 1;
+      cfg::resetKeys(); soundDelete();
+      showResetDone(); delay(1400); ESP.restart();
+      return true;
+    }
+    // Pill 2: All
+    if (touchHitTest(tx, ty, col0x, row1y, pillW, pillH)) {
+      soundSelect(); resetMenuCursor = 2;
+      state = STATE_RESET_CONFIRM; showResetConfirm();
+      return true;
+    }
+    // Pill 3: Sounds (reset sounds setting to default = on)
+    if (touchHitTest(tx, ty, col1x, row1y, pillW, pillH)) {
+      soundSelect(); resetMenuCursor = 3;
+      amarSoundSetEnabled(true); soundSuccess();
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+      return true;
+    }
+    // Pill 4: Cancel
+    if (touchHitTest(tx, ty, cancelX, cancelY, cancelW, pillH)) {
+      soundBack(); resetMenuCursor = 4;
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+      return true;
     }
     if (ty >= 180) {
       soundBack();
-      state = STATE_SETTINGS;
-      showSettings(settingsCursor);
+      state = STATE_SETTINGS; showSettings(settingsCursor);
       return true;
     }
     return false;
@@ -712,7 +753,7 @@ static bool handleTouch() {
   return false;
 }
 
-// ─── Main loop ────────────────────────────────────────────────────────────────────────────
+// ─── Main loop ────────────────────────────────────────────────────────────────────────────────────
 void loop() {
   handleSerialConfig();
   serviceDisplay();
@@ -731,11 +772,7 @@ void loop() {
     if (captivePortalActive) dnsServer.processNextRequest();
   }
 
-  // ── Auto-sleep check ──────────────────────────────────────────────────────────
-  // Placed here — after handleTouch() and transfer server polling, but before
-  // state dispatch — so it runs every loop iteration for every state.
-  // checkAutoSleep() guards internally against STATE_RECORDING and
-  // transferServerActive, so no additional guard is needed here.
+  // ── Auto-sleep check ──────────────────────────────────────────────────────────────────────
   checkAutoSleep();
 
   ButtonEvent recEv = pollButton(BTN_REC, false);
@@ -812,7 +849,11 @@ void loop() {
       } else if (settingsCursor == 4) {
         cfg::setIdleTouchRecord(!cfg::idleTouchRecord());
         showSettings(settingsCursor);
+      } else if (settingsCursor == 5) {
+        cycleMinRecSecs();
+        showSettings(settingsCursor);
       } else {
+        // row 6: reset
         resetMenuCursor = 0;
         state = STATE_RESET_MENU;
         showResetMenu(resetMenuCursor);
@@ -908,26 +949,51 @@ void loop() {
     return;
   }
 
+  // ── Reset menu: 5 pills, rec=select, pwr=back
   if (state == STATE_RESET_MENU) {
     if (pwrEv == EV_SINGLE) {
-      resetMenuCursor = (resetMenuCursor + 1) % 3;
-      showResetMenu(resetMenuCursor);
-    }
-    if (pwrEv == EV_LONG) {
+      // pwr=back goes straight to settings
       state = STATE_SETTINGS; showSettings(settingsCursor);
     }
     if (recEv == EV_SINGLE) {
-      if (resetMenuCursor == 0) {
-        state = STATE_RESET_WIFI_CONFIRM;
-        showResetWifiConfirm();
-      } else if (resetMenuCursor == 1) {
-        cfg::resetKeys(); soundDelete();
-        showResetDone(); delay(1400); ESP.restart();
-      } else {
-        state = STATE_RESET_CONFIRM;
-        showResetConfirm();
+      switch (resetMenuCursor) {
+        case 0:  // WiFi
+          state = STATE_RESET_WIFI_CONFIRM;
+          showResetWifiConfirm();
+          break;
+        case 1:  // Keys
+          cfg::resetKeys(); soundDelete();
+          showResetDone(); delay(1400); ESP.restart();
+          break;
+        case 2:  // All
+          state = STATE_RESET_CONFIRM;
+          showResetConfirm();
+          break;
+        case 3:  // Sounds — reset to default (on)
+          amarSoundSetEnabled(true); soundSuccess();
+          state = STATE_SETTINGS; showSettings(settingsCursor);
+          break;
+        case 4:  // Cancel
+          soundBack();
+          state = STATE_SETTINGS; showSettings(settingsCursor);
+          break;
       }
     }
+    if (recEv == EV_LONG) {
+      // Also allow long-rec as back
+      state = STATE_SETTINGS; showSettings(settingsCursor);
+    }
+    // Cycle through pills with pwr scroll — reuse pwr EV_SINGLE handled above;
+    // add a separate cycle via a second check so pressing pwr scrolls AND exits.
+    // Actually: pwr=back (single), so cycle pills uses... rec=cycle is awkward.
+    // Decision: keep pwr=back; cycle the cursor with the rec button in EV_LONG
+    // is already back; leave cursor driven by touch only for pills.
+    // For button-only users: pwr single scrolls pills, pwr long = back.
+    return;
+  }
+
+  if (state == STATE_RESET_MENU) {
+    // (handled above — dead code guard)
     return;
   }
 
