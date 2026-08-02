@@ -35,16 +35,17 @@ jobs:
           arduino-cli config add board_manager.additional_urls \
             https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 
-      # ── 3. Install ESP32 Arduino core (3.x) ───────────────────────────────
+      # ── 3. Install ESP32 Arduino core ──────────────────────────────────
+      # 3.2.0 = IDF 5.3 — required for driver/i2c_master.h used in the sketch.
+      # 3.0.x shipped IDF 5.1 which still used the legacy driver/i2c.h API.
       - name: Install ESP32 core
         run: |
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32@3.0.7
+          arduino-cli core install esp32:esp32@3.2.0
 
       # ── 4. Install libraries from Arduino Library Manager ─────────────────
-      # Only libraries that exist in the index go here.
-      # WebServer, HTTPUpdate, WiFiClientSecure, SD, FS ship with esp32:esp32
-      # and must NOT be listed here — arduino-cli lib install will error on them.
+      # Only ArduinoJson needs separate installation.
+      # WebServer, HTTPUpdate, WiFiClientSecure, SD, FS ship with esp32:esp32.
       - name: Install libraries
         run: |
           arduino-cli lib install "ArduinoJson@7.3.1"
