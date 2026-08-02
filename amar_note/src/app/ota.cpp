@@ -28,9 +28,10 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
   return rpat > lpat;
 }
 
-// Parse host, path (and optional port) out of an https:// URL.
-// Returns false if the URL doesn't look like https://.
-static bool parseHttpsUrl(const String& url, String& host, int& port, String& path) {
+// Parse host, path, and optional port out of an https:// URL.
+// Signature: (url, host, path, port) — port defaults to 443 if not in URL.
+// Returns false if the URL doesn't start with https://.
+static bool parseHttpsUrl(const String& url, String& host, String& path, int& port) {
   if (!url.startsWith("https://")) return false;
   String rest = url.substring(8); // strip "https://"
   int slash = rest.indexOf('/');
@@ -49,7 +50,7 @@ static bool parseHttpsUrl(const String& url, String& host, int& port, String& pa
 
 // Follow a single HTTPS redirect (one hop only — GitHub release asset
 // browser_download_url always redirects once to objects.githubusercontent.com).
-// Returns the Location header value on a 3xx, or the original url on 200,
+// Returns the Location header value on a 3xx, the original url on 200,
 // or empty string on error.
 static String resolveRedirect(const String& url) {
   String host, path;
@@ -69,7 +70,7 @@ static String resolveRedirect(const String& url) {
     return "";
   }
 
-  // Use HEAD so we don't pull the whole binary just to get the redirect.
+  // HEAD request — avoids pulling the full binary just to get the redirect.
   client.printf(
     "HEAD %s HTTP/1.1\r\n"
     "Host: %s\r\n"
@@ -89,15 +90,13 @@ static String resolveRedirect(const String& url) {
     line.trim();
     if (line.length() == 0) break; // end of headers
     if (line.startsWith("HTTP/")) {
-      // e.g. "HTTP/1.1 302 Found"
       int sp1 = line.indexOf(' ');
       int sp2 = line.indexOf(' ', sp1 + 1);
       int code = line.substring(sp1 + 1, sp2 > 0 ? sp2 : line.length()).toInt();
       is3xx = (code >= 300 && code < 400);
       if (code == 200) {
-        // No redirect — return the original URL as-is.
         client.stop();
-        return url;
+        return url; // no redirect needed
       }
       if (!is3xx) {
         Serial.printf("[OTA] resolveRedirect: unexpected status %d\n", code);
@@ -210,8 +209,7 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
   assetUrl = resolveRedirect(redirectUrl);
   if (assetUrl.length() == 0) {
     Serial.printf("[OTA] could not resolve asset URL for %s\n", latestTag.c_str());
-    // Fall back to the original URL — it may work in some cases.
-    assetUrl = redirectUrl;
+    assetUrl = redirectUrl; // fall back to original
   }
 
   Serial.printf("[OTA] latest=%s local=%s\n[OTA] asset=%s\n",
