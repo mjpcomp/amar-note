@@ -8,6 +8,7 @@
 #include "ui.h"
 #include "battery.h"
 #include "config_store.h"
+#include "ota.h"
 #include "WiFi.h"
 #include "WiFiClientSecure.h"
 #include <WebServer.h>
@@ -212,6 +213,7 @@ String portalCss() {
     ".badge-ok{background:#d4edda;color:#1a6630}"
     ".badge-warn{background:#fff3cd;color:#856404}"
     ".badge-off{background:#e9ecef;color:#6c757d}"
+    ".badge-new{background:#cfe2ff;color:#084298}"
 
     // ── Rows inside cards
     ".row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}"
@@ -268,6 +270,11 @@ String portalCss() {
 
     // ── Note count pill
     ".count-pill{display:inline-flex;align-items:center;border:1.5px solid #111;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;background:#fffaf1}"
+
+    // ── OTA version banner
+    ".ver-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0 4px}"
+    ".ver-item{font-size:13px}"
+    ".ver-arrow{color:#6a665f;font-size:16px}"
 
     // ── Responsive
     "@media(max-width:520px){"
@@ -814,8 +821,56 @@ void handleProvisionSave() {
   transferServer.send(200, "text/html", html);
 }
 
+// ─── /ota/check ──────────────────────────────────────────────────────────────
+// Called by the "Check GitHub" button. Queries the GitHub releases API,
+// then redirects back to /ota with result query params:
+//   ?update=1&tag=vX.Y.Z&url=<encoded>   — update available
+//   ?uptodate=1                           — already on latest
+//   ?err=1                                — network / API failure
+void handleOtaCheck() {
+  if (WiFi.status() != WL_CONNECTED) {
+    transferServer.sendHeader("Location", "/ota?err=1");
+    transferServer.send(303);
+    return;
+  }
+  String latestTag, assetUrl;
+  bool newer = otaCheckGithub(latestTag, assetUrl);
+  if (latestTag.length() == 0) {
+    // network error or no release found
+    transferServer.sendHeader("Location", "/ota?err=1");
+    transferServer.send(303);
+    return;
+  }
+  if (!newer) {
+    transferServer.sendHeader("Location", "/ota?uptodate=1&latest=" + latestTag);
+    transferServer.send(303);
+    return;
+  }
+  // URL-encode the asset URL so it survives the redirect query string
+  String enc = "";
+  for (int i = 0; i < (int)assetUrl.length(); i++) {
+    char c = assetUrl[i];
+    if (isAlphaNumeric(c) || c == '-' || c == '_' || c == '.' || c == '~' || c == ':' || c == '/' || c == '?' || c == '=' || c == '&') {
+      enc += c;
+    } else {
+      char buf[4]; snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
+      enc += buf;
+    }
+  }
+  transferServer.sendHeader("Location", "/ota?update=1&tag=" + latestTag + "&url=" + enc);
+  transferServer.send(303);
+}
+
 // ─── /ota ────────────────────────────────────────────────────────────────────
 void handleOtaPage() {
+  // Read result params from a prior /ota/check redirect
+  bool hasUpdate  = transferServer.hasArg("update")   && transferServer.arg("update")   == "1";
+  bool upToDate   = transferServer.hasArg("uptodate") && transferServer.arg("uptodate") == "1";
+  bool checkErr   = transferServer.hasArg("err")      && transferServer.arg("err")      == "1";
+  String prefillUrl = hasUpdate ? urlDecodeSimple(transferServer.arg("url")) : "";
+  String latestTag  = hasUpdate ? transferServer.arg("tag") :
+                      (upToDate ? transferServer.arg("latest") : "");
+
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
                 "<title>Amar Note \u00b7 Update</title>" + portalCss() + "</head><body>";
@@ -824,14 +879,43 @@ void handleOtaPage() {
   html += "<div class='page-title'>update</div>";
   html += "<div class='page-sub'>firmware " FW_VERSION "</div>";
 
+  // ── GitHub check card
+  html += "<div class='card'>";
+  html += "<div class='card-title'>github release check</div>";
+
+  // Status banner (shown after a check)
+  if (hasUpdate) {
+    html += "<div class='ver-banner'>";
+    html += "<span class='ver-item'>current &nbsp;<strong>" FW_VERSION "</strong></span>";
+    html += "<span class='ver-arrow'>&#8594;</span>";
+    html += "<span class='ver-item'><strong>" + htmlEscape(latestTag) + "</strong> &nbsp;<span class='badge badge-new'>update available</span></span>";
+    html += "</div>";
+    html += "<p class='hint' style='margin-bottom:14px'>A new release was found. The URL below has been pre-filled \u2014 tap <b>Flash firmware</b> to install it.</p>";
+  } else if (upToDate) {
+    html += "<div class='ver-banner'>";
+    html += "<span class='ver-item'>current &nbsp;<strong>" FW_VERSION "</strong></span>";
+    html += "<span class='ver-arrow'>&#183;</span>";
+    html += "<span class='ver-item'>latest &nbsp;<strong>" + htmlEscape(latestTag) + "</strong> &nbsp;<span class='badge badge-ok'>up to date &#10003;</span></span>";
+    html += "</div>";
+  } else if (checkErr) {
+    html += "<p class='hint' style='margin-bottom:10px;color:#c0392b'>&#9888; Could not reach GitHub. Check Wi-Fi and try again.</p>";
+  } else {
+    html += "<p class='hint' style='margin-bottom:14px'>Check for the latest release on GitHub &#40;" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "&#41;. "
+            "If a newer version exists its download URL will be pre-filled automatically.</p>";
+  }
+
+  html += "<a class='btn primary' href='/ota/check'>Check GitHub</a>";
+  html += "</div>";
+
+  // ── Flash card
   html += "<div class='card'>";
   html += "<div class='card-title'>over-the-air flash</div>";
-  html += "<p class='hint' style='margin-bottom:14px'>Paste an HTTPS URL to a compiled <code>.bin</code> firmware file. "
+  html += "<p class='hint' style='margin-bottom:14px'>Paste an HTTPS URL to a compiled <code>.bin</code> firmware file, or use the pre-filled URL from the check above. "
           "The device verifies the server certificate, flashes the inactive OTA slot, "
           "and reboots into it &mdash; rolling back automatically if it fails to boot.</p>";
   html += "<form action='/ota/run' method='post'>";
-  html += "<div class='form-section'><label class='form-label'>Firmware URL</label>"
-          "<input type='url' name='url' placeholder='https://host/amar-note.bin'></div>";
+  html += "<div class='form-section'><label class='form-label'>Firmware URL</label>";
+  html += "<input type='url' name='url' placeholder='https://host/amar-note.bin' value='" + htmlEscape(prefillUrl) + "'></div>";
   html += "<button type='submit' class='btn primary'>Flash firmware</button>";
   html += "</form>";
   html += "<hr class='divider'>";
@@ -876,6 +960,7 @@ void setupTransferServer() {
   transferServer.on("/provision",       HTTP_GET,  handleProvisionPage);
   transferServer.on("/provision/save",  HTTP_POST, handleProvisionSave);
   transferServer.on("/ota",             HTTP_GET,  handleOtaPage);
+  transferServer.on("/ota/check",       HTTP_GET,  handleOtaCheck);
   transferServer.on("/ota/run",         HTTP_POST, handleOtaRun);
   transferServer.on("/tags",            HTTP_GET,  handleTagsPage);
   transferServer.on("/tag/add",         HTTP_GET,  handleTagAdd);
