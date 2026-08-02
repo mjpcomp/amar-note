@@ -933,9 +933,13 @@ void loop() {
     return;
   }
 
-  // ── Reset menu: 5 pills, rec=select, pwr=back
+  // ── Reset menu: pwr=cycle cursor, pwr-long=back, rec=select, rec-long=back
   if (state == STATE_RESET_MENU) {
     if (pwrEv == EV_SINGLE) {
+      resetMenuCursor = (resetMenuCursor + 1) % 5;
+      showResetMenu(resetMenuCursor);
+    }
+    if (pwrEv == EV_LONG) {
       state = STATE_SETTINGS; showSettings(settingsCursor);
     }
     if (recEv == EV_SINGLE) {
