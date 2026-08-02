@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ── 2. Install + configure arduino-cli ──────────────────────────────
-      # Install and configure in one step so the binary is on PATH immediately.
+      # Install to /usr/local/bin so it is on PATH for all subsequent steps.
       - name: Install and configure arduino-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
@@ -41,17 +41,13 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.0.7
 
-      # ── 4. Install required libraries ─────────────────────────────────────
+      # ── 4. Install libraries from Arduino Library Manager ─────────────────
+      # Only libraries that exist in the index go here.
+      # WebServer, HTTPUpdate, WiFiClientSecure, SD, FS ship with esp32:esp32
+      # and must NOT be listed here — arduino-cli lib install will error on them.
       - name: Install libraries
         run: |
-          arduino-cli lib install \
-            "ArduinoJson@7.3.1" \
-            "WebServer" \
-            "HTTPUpdate" \
-            "SD" \
-            "FS"
-          # Note: ESP32-specific libs (WiFiClientSecure, USBMSC, etc.) ship
-          # with the esp32:esp32 core and do not need separate installation.
+          arduino-cli lib install "ArduinoJson@7.3.1"
 
       # ── 5. Create secrets.h stub (CI build — no real keys needed) ─────────
       - name: Create secrets.h stub
