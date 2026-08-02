@@ -103,19 +103,19 @@
 // ---------------------------------------------------------------------------
 // Settings menu row count
 // ---------------------------------------------------------------------------
-// Bump this when adding or removing rows from SETTINGS_ITEMS[] in the .ino
-// and the corresponding showSettings() / handleTouch() logic in ui.cpp.
+// Bump this when adding or removing rows from the showSettings() rendering
+// and corresponding input handler in amar_note.ino.
 //
-// Current rows: Sounds | Transfer | Device | idle rec | min rec | Reset
-// (Erase All is now a sub-option inside Reset; net row count unchanged = 6)
+// Rows (0-based):
+//   0 Sounds | 1 Transfer | 2 Device | 3 Erase All | 4 Idle Rec | 5 Min Rec | 6 Reset
 //
-#define SETTINGS_COUNT  6
+#define SETTINGS_COUNT  7
 
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
 #define FIRMWARE_VERSION  "v1.0"
 #define FW_VERSION        FIRMWARE_VERSION
 
-/* ── Nekogotchi (virtual pet) ─────────────────────────────────────────────── */
+/* ── Nekogotchi (virtual pet) ──────────────────────────────────────────────── */
 /* SD save file */
 #define PET_FILE            "/pet.dat"
 /* Starting stats (0-100) */

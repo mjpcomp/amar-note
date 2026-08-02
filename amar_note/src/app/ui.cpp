@@ -15,7 +15,7 @@
 #define W   200
 #define H   200
 
-// ─── Icons ────────────────────────────────────────────────────────────────────────────────────
+// ─── Icons ─────────────────────────────────────────────────────────────────────────────────────
 void iconMicWhite(int cx, int cy) {
   fillRect(cx-13, cy-36, 26, 44, WHITE);
   fillCircle(cx, cy-36, 13, WHITE);
@@ -109,7 +109,7 @@ void iconUsbDrive(int cx, int cy) {
   hline(cx-24, cy+2, 22, BLACK);
 }
 
-// ── Menu tile icon: circular sync arrows (small, centred in tile) ────────────
+// ── Menu tile icon: circular sync arrows (small, centred in tile) ──────────────────
 static void iconSyncSmall(int cx, int cy, uint8_t col) {
   strokeCircle(cx, cy, 12, 2, col);
   // Top-right arrow head pointing clockwise
@@ -124,7 +124,7 @@ static void iconSyncSmall(int cx, int cy, uint8_t col) {
   thickLine(cx-7,  cy+12, cx-11, cy+7,  2, col);
 }
 
-// ── Menu tile icon: gear / cog (Settings) ────────────────────────────────────
+// ── Menu tile icon: gear / cog (Settings) ──────────────────────────────────
 static void iconGear(int cx, int cy, uint8_t col) {
   // Outer ring with 6 teeth
   strokeCircle(cx, cy, 12, 2, col);
@@ -161,7 +161,7 @@ static void iconUsbPlug(int cx, int cy, uint8_t col) {
   fillCircle(cx, cy-17, 2, col);
 }
 
-// ── Menu tile icon: cute cat face (Tamagotchi) ───────────────────────────────
+// ── Menu tile icon: cute cat face (Tamagotchi) ─────────────────────────────────
 static void iconCatFace(int cx, int cy, uint8_t col) {
   // Head
   strokeCircle(cx, cy+2, 13, 2, col);
@@ -181,7 +181,7 @@ static void iconCatFace(int cx, int cy, uint8_t col) {
   thickLine(cx+2, cy+9, cx+5, cy+6,  2, col);
 }
 
-// ─── Layout helpers ────────────────────────────────────────────────────────────────────────────
+// ─── Layout helpers ─────────────────────────────────────────────────────────────────────────────────
 void drawHeader(const char* title, const char* rightInfo) {
   fillRect(0, 0, W, 28, BLACK);
   drawStrC(W/2, 10, title, 1, WHITE);
@@ -332,7 +332,7 @@ void drawListMenuCard(int y, const char* title, const char* meta, bool active) {
   }
 }
 
-// ─── Screens ──────────────────────────────────────────────────────────────────────────────────
+// ─── Screens ─────────────────────────────────────────────────────────────────────────────────────
 static void drawBolt(int x, int y) {
   fillTriangle(x+7, y,    x+1, y+9,  x+6, y+9,  BLACK);
   fillTriangle(x+5, y+8,  x+10, y+8, x+3, y+18, BLACK);
@@ -389,23 +389,14 @@ void showBatteryLow(int pct) {
   refresh();
 }
 
-// ─── Recording screen: animated microphone with sound arcs ────────────────────────────────────
-//
-// White background, black mic + arcs — consistent with all other screens.
-// drawMicBody uses WHITE mask rects to clip geometry into the background;
-// drawSoundArcs similarly masks above/below the arc band with WHITE.
+// ─── Recording screen: animated microphone with sound arcs ───────────────────────────────────────────
 static float recCircleR = 24.0f;
 
 static void drawMicBody(int cx, int micCy) {
-  // Mic capsule body
   fillRoundRect(cx - 11, micCy - 18, 22, 36, 10, BLACK);
   fillCircle(cx, micCy - 18, 11, BLACK);
-  // Mic stand arc (lower half)
   strokeCircle(cx, micCy, 22, 3, BLACK);
-  // Mask the upper half of the stand arc so only the lower C-shape shows.
-  // Must be WHITE (background colour) to act as a clip, not a solid block.
   fillRect(cx - 26, micCy - 26, 52, 28, WHITE);
-  // Stand stem + base
   fillRect(cx - 1, micCy + 18, 3, 14, BLACK);
   fillRect(cx - 15, micCy + 31, 30, 3, BLACK);
 }
@@ -415,8 +406,6 @@ static void drawSoundArcs(int cx, int micCy, int arcR) {
   strokeCircle(cx, micCy, arcR,      2, BLACK);
   int inner = arcR - 12;
   if (inner > 24) strokeCircle(cx, micCy, inner, 2, BLACK);
-  // Mask top and bottom of each arc circle so only the left/right wings show.
-  // WHITE fills erase into the white background — must NOT be BLACK.
   int maskH = arcR / 2 + 2;
   fillRect(cx - arcR - 4, micCy - arcR - 4, 2*(arcR+4), maskH + 4, WHITE);
   fillRect(cx - arcR - 4, micCy + arcR - maskH + 2, 2*(arcR+4), maskH + 6, WHITE);
@@ -424,7 +413,6 @@ static void drawSoundArcs(int cx, int micCy, int arcR) {
 
 static void drawRecordingScreen(uint32_t elapsedMs, int level) {
   (void)elapsedMs;
-  // White background — consistent with every other screen.
   clearWhite();
   float target = 26.0f + (float)level * 42.0f / 152.0f;
   if (target < 26.0f) target = 26.0f;
@@ -478,7 +466,7 @@ void showTagSelect(int cursor) {
   refresh();
 }
 
-// ─── Menu layout ──────────────────────────────────────────────────────────────────────────────
+// ─── Menu layout ─────────────────────────────────────────────────────────────────────────────────
 void showMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "menu", 1, BLACK);
@@ -747,31 +735,55 @@ void showTransferMode(const char* ip) {
   refresh();
 }
 
+// ─── Settings screen ──────────────────────────────────────────────────────────────────────────
 void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
   hline(16, 32, W-32, BLACK);
-  const int y0 = 38, step = 26, boxH = 22;
+
+  // 7 rows × 24px step, starting at y=38 → last row bottom at 38+6×24+22 = 204 (fits tight)
+  const int y0 = 38, step = 24, boxH = 22;
+
   for (int row = 0; row < SETTINGS_COUNT; row++) {
-    bool active = row == cursor;
+    bool active = (row == cursor);
     int y = y0 + row * step;
     if (active) fillRoundRect(16, y, 168, boxH, 6, BLACK);
     else        strokeRoundRect(16, y, 168, boxH, 6, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
-    if (row == 0) {
-      drawStr(28, y + 6, "sounds", 1, col);
-      drawStr(W - 70, y + 6, amarSoundIsEnabled() ? "on" : "off", 1, col);
-    } else if (row == 1) {
-      drawStr(28, y + 6, "transfer", 1, col);
-    } else if (row == 2) {
-      drawStr(28, y + 6, "device", 1, col);
-    } else if (row == 3) {
-      drawStr(28, y + 6, "erase all", 1, col);
-    } else if (row == 4) {
-      drawStr(28, y + 6, "idle rec", 1, col);
-      drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
-    } else {
-      drawStr(28, y + 6, "reset", 1, col);
+
+    switch (row) {
+      case 0:
+        drawStr(28, y + 6, "sounds", 1, col);
+        drawStr(W - 70, y + 6, amarSoundIsEnabled() ? "on" : "off", 1, col);
+        break;
+      case 1:
+        drawStr(28, y + 6, "transfer", 1, col);
+        break;
+      case 2:
+        drawStr(28, y + 6, "device", 1, col);
+        break;
+      case 3:
+        drawStr(28, y + 6, "erase all", 1, col);
+        break;
+      case 4:
+        drawStr(28, y + 6, "idle rec", 1, col);
+        drawStr(W - 70, y + 6, cfg::idleTouchRecord() ? "on" : "off", 1, col);
+        break;
+      case 5: {
+        // min rec: off / 1s / 2s / 3s / 5s
+        drawStr(28, y + 6, "min rec", 1, col);
+        uint8_t mr = cfg::minRecSecs();
+        char mrBuf[8];
+        if (mr == 0) snprintf(mrBuf, sizeof(mrBuf), "off");
+        else         snprintf(mrBuf, sizeof(mrBuf), "%ds", (int)mr);
+        drawStr(W - 70, y + 6, mrBuf, 1, col);
+        break;
+      }
+      case 6:
+        drawStr(28, y + 6, "reset", 1, col);
+        break;
+      default:
+        break;
     }
   }
   refresh();
@@ -792,23 +804,38 @@ void showDeviceInfo() {
   refresh();
 }
 
+// ─── Reset sub-screen: 5 modern pills ────────────────────────────────────────────────────────
+//
+// Pills (cursor 0–4):
+//   0 WiFi   1 Keys
+//   2 All    3 Sounds
+//        4 Cancel
+//
+// rec cycles forward; pwr goes back to settings.
 void showResetMenu(int cursor) {
   clearWhite();
   drawStr(16, 14, "reset", 1, BLACK);
-  hline(16, 32, W-32, BLACK);
-  const char* opts[3] = { "Reset WiFi", "Clear Keys", "Clear All" };
-  const int y0 = 52, step = 36, boxH = 28;
-  for (int i = 0; i < 3; i++) {
-    bool active = (i == cursor);
-    int y = y0 + i * step;
-    if (active) fillRoundRect(20, y, 160, boxH, 8, BLACK);
-    else        strokeRoundRect(20, y, 160, boxH, 8, 1, BLACK);
-    drawStrC(100, y + 8, opts[i], 1, active ? WHITE : BLACK);
-  }
+  hline(16, 26, W-32, BLACK);
+
+  const int pillW = 82, pillH = 34, gap = 8;
+  const int col0x = 10,  col1x = col0x + pillW + gap;  // two-column layout
+  const int row0y = 38,  row1y = row0y + pillH + gap;
+  const int cancelW = 100, cancelX = (W - cancelW) / 2;
+  const int cancelY = row1y + pillH + gap;
+
+  // Row 0: WiFi | Keys
+  drawModernPill(col0x, row0y, pillW, pillH, "WiFi",   cursor == 0);
+  drawModernPill(col1x, row0y, pillW, pillH, "Keys",   cursor == 1);
+  // Row 1: All | Sounds
+  drawModernPill(col0x, row1y, pillW, pillH, "All",    cursor == 2);
+  drawModernPill(col1x, row1y, pillW, pillH, "Sounds", cursor == 3);
+  // Row 2 (centred): Cancel
+  drawModernPill(cancelX, cancelY, cancelW, pillH, "Cancel", cursor == 4);
+
   hline(0, 179, W, BLACK);
   fillRect(0, 180, W, 20, WHITE);
   drawStr(8, 186, "rec=select", 1, BLACK);
-  const char* r = "pwr=scroll";
+  const char* r = "pwr=back";
   drawStr(W - 8 - textW(r, 1), 186, r, 1, BLACK);
   refresh();
 }
