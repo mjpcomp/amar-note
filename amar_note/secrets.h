@@ -20,9 +20,12 @@
 #define WIFI_SSID      "...."   // your 2.4 GHz Wi-Fi name        (or leave as "....")
 #define WIFI_PASS      "...."   // your Wi-Fi password            (or leave as "....")
 #define OPENAI_KEY     "...."   // OpenAI API key                 (or leave as "....")
-#define GITHUB_TOKEN   "...."   // GitHub personal access token   (or leave as "....")
-                                // Used for OTA updates and vault sync.
-                                // Needs Contents: Read on mjpcomp/amar-note for OTA;
-                                // add Contents: Write on your vault repo for sync.
+
+// Optional: pre-seed a GitHub personal access token. Leave as "...." and
+// enter it via the portal instead (Setup → Personal access token).
+// Used opportunistically to avoid API rate-limits; NOT required for OTA.
+#ifndef GITHUB_TOKEN
+#define GITHUB_TOKEN   "...."
+#endif
 
 #endif

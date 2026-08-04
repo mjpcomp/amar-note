@@ -39,9 +39,11 @@ void begin() {
   if (!prefs.isKey("oaikey") && !isPlaceholder(OPENAI_KEY)) {
     prefs.putString("oaikey", OPENAI_KEY);
   }
+#ifdef GITHUB_TOKEN
   if (!prefs.isKey("ghtok") && !isPlaceholder(GITHUB_TOKEN)) {
     prefs.putString("ghtok", GITHUB_TOKEN);
   }
+#endif
 
   // cfgv=1: force AI-enrich back on if it was ever inadvertently cleared.
   if (!prefs.isKey("cfgv")) {
