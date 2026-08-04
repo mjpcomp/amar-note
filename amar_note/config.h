@@ -112,7 +112,7 @@
 #define SETTINGS_COUNT  6
 
 /* Firmware version — bump here only; FW_VERSION is an alias for back-compat */
-#define FIRMWARE_VERSION  "v1.5.4"
+#define FIRMWARE_VERSION  "v1.5.5"
 #define FW_VERSION        FIRMWARE_VERSION
 
 /* OTA update source — GitHub releases for this repo */
