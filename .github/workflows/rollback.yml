@@ -43,7 +43,13 @@ jobs:
             fi
           done
 
-      # ── 2. Delete GitHub Release ──────────────────────────────────────────
+      # ── 2. Checkout (needed for git push --delete in step 3) ──────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 3. Delete GitHub Release ──────────────────────────────────────────
       - name: Delete GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -58,26 +64,22 @@ jobs:
             echo "No release found for $TAG — skipping"
           fi
 
-      # ── 3. Delete git tag (remote) ────────────────────────────────────────
+      # ── 4. Delete git tag ────────────────────────────────────────────────
+      # git push --delete uses standard exit codes and works reliably in
+      # Actions. The previous gh api approach with -w '%{http_code}' was
+      # silently no-oping because that flag is curl-only, not supported by
+      # the gh CLI.
       - name: Delete git tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ github.event.inputs.remove_version }}"
-          HTTP_STATUS=$(gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/$TAG \
-            --silent -w '%{http_code}' 2>/dev/null || echo "404")
-          if [ "$HTTP_STATUS" = "204" ] || [ -z "$HTTP_STATUS" ]; then
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            git push --delete origin "$TAG"
             echo "Deleted tag $TAG"
           else
-            echo "Tag $TAG not found or already deleted (HTTP $HTTP_STATUS) — skipping"
+            echo "Tag $TAG not found on remote — skipping"
           fi
 
-      # ── 4. Checkout + revert FIRMWARE_VERSION ────────────────────────────
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # ── 5. Revert FIRMWARE_VERSION in config.h ────────────────────────────
       - name: Revert FIRMWARE_VERSION in config.h
         run: |
           NEW_VER="v${{ github.event.inputs.downgrade_to }}"
@@ -97,9 +99,7 @@ jobs:
             git push
           fi
 
-      # ── 5. Cancel all other in-progress / queued runs ────────────────────
-      # Prevents a stale release.yml or a second rollback from firing while
-      # this one is still settling.
+      # ── 6. Cancel all other in-progress / queued runs ────────────────────
       - name: Cancel other in-progress and queued runs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
