@@ -30,7 +30,7 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
 }
 
 // ─── otaCheckGithub ───────────────────────────────────────────────────────────
-bool otaCheckGithub(String& latestTag, String& assetUrl) {
+bool otaCheckGithub(String& latestTag, String& assetUrl, size_t& assetSize) {
   const char* host = "api.github.com";
   String path = "/repos/" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "/releases/latest";
 
@@ -89,12 +89,16 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
   if (latestTag.length() == 0) { Serial.println("[OTA] no tag_name"); return false; }
 
   // Use browser_download_url — the direct github.com CDN URL.
-  // This works on public repos with no auth, unlike the API asset URL.
+  // Also capture the asset `size` field — this is the true firmware binary
+  // byte count and must be used for progress reporting. The CDN Content-Length
+  // reflects the full flash capacity (8388608), not the .bin size.
+  assetSize = 0;
   JsonArray assets = doc["assets"].as<JsonArray>();
   for (JsonObject asset : assets) {
     String name = asset["name"] | "";
     if (name.endsWith(".bin")) {
-      assetUrl = asset["browser_download_url"] | "";
+      assetUrl  = asset["browser_download_url"] | "";
+      assetSize = (size_t)(asset["size"] | 0);
       break;
     }
   }
@@ -104,17 +108,19 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
     return false;
   }
 
-  Serial.printf("[OTA] latest=%s local=%s\n[OTA] asset=%s\n",
-                latestTag.c_str(), FIRMWARE_VERSION, assetUrl.c_str());
+  Serial.printf("[OTA] latest=%s local=%s\n[OTA] asset=%s (%u bytes)\n",
+                latestTag.c_str(), FIRMWARE_VERSION, assetUrl.c_str(), (unsigned)assetSize);
   return isNewer(latestTag, FIRMWARE_VERSION);
 }
 
-// ─── flash helper ─────────────────────────────────────────────────────────────
-// Streams bytes from `client` into the OTA partition.
-// Uses UPDATE_SIZE_UNKNOWN so Update.begin() sizes itself against the actual
-// partition — avoids "Bad Size Given" when Content-Length equals the full
-// flash capacity rather than the firmware binary size.
-static bool streamToFlash(WiFiClientSecure& client, size_t contentLength,
+// ─── streamToFlash ────────────────────────────────────────────────────────────────
+//
+// Streams bytes from `client` into the OTA partition until the connection
+// closes. Uses UPDATE_SIZE_UNKNOWN so the partition sizes itself rather than
+// rejecting the CDN Content-Length (which equals full flash capacity).
+// `totalBytes` is the true firmware size from the GitHub API JSON — used
+// only as the denominator for progressCb, not to control the read loop.
+static bool streamToFlash(WiFiClientSecure& client, size_t totalBytes,
                            void (*progressCb)(size_t, size_t),
                            uint32_t timeoutMs = 120000) {
   if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
@@ -126,6 +132,10 @@ static bool streamToFlash(WiFiClientSecure& client, size_t contentLength,
   size_t written = 0;
   uint32_t deadline = millis() + timeoutMs;
 
+  // Read until the server closes the connection — do NOT use totalBytes or
+  // Content-Length to gate the loop, because the CDN Content-Length is the
+  // full flash size, not the firmware size. Connection close is the only
+  // reliable EOF signal here.
   while (client.available() || (client.connected() && millis() < deadline)) {
     if (!client.available()) { delay(5); continue; }
     int n = client.read(buf, sizeof(buf));
@@ -136,7 +146,9 @@ static bool streamToFlash(WiFiClientSecure& client, size_t contentLength,
       return false;
     }
     written += n;
-    if (progressCb) progressCb(written, contentLength);
+    // Use the API-reported size for progress so the bar reflects real progress.
+    // Falls back to written bytes as total if assetSize was 0.
+    if (progressCb) progressCb(written, totalBytes > 0 ? totalBytes : written);
   }
 
   if (!Update.end(true)) {
@@ -155,6 +167,7 @@ static bool streamToFlash(WiFiClientSecure& client, size_t contentLength,
 // We follow that single 302 and stream the binary directly into the inactive
 // OTA partition via Update.h.
 bool otaDownloadAndFlash(const String& browserDownloadUrl,
+                         size_t assetSize,
                          void (*progressCb)(size_t, size_t)) {
 
   if (!browserDownloadUrl.startsWith("https://")) {
@@ -169,7 +182,6 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
     path = (slash >= 0) ? rest.substring(slash) : "/";
   };
 
-  // ── helper: read HTTP response headers from a connected client ────────────
   auto readHeaders = [](WiFiClientSecure& c, int& code, size_t& clen, String& loc,
                         uint32_t timeoutMs) {
     uint32_t deadline = millis() + timeoutMs;
@@ -217,7 +229,8 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
   size_t contentLength = 0;
   String location;
   readHeaders(client, httpCode, contentLength, location, 20000);
-  Serial.printf("[OTA] HTTP %d  content-length=%u\n", httpCode, (unsigned)contentLength);
+  Serial.printf("[OTA] HTTP %d  content-length=%u  asset-size=%u\n",
+                httpCode, (unsigned)contentLength, (unsigned)assetSize);
 
   // ── Follow one redirect ───────────────────────────────────────────────────
   if (httpCode >= 300 && httpCode < 400) {
@@ -253,7 +266,7 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
       Serial.printf("[OTA] CDN error %d\n", httpCode); c2.stop(); return false;
     }
 
-    bool ok = streamToFlash(c2, contentLength, progressCb);
+    bool ok = streamToFlash(c2, assetSize, progressCb);
     c2.stop();
     return ok;
   }
@@ -264,7 +277,7 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
     client.stop(); return false;
   }
 
-  bool ok = streamToFlash(client, contentLength, progressCb);
+  bool ok = streamToFlash(client, assetSize, progressCb);
   client.stop();
   return ok;
 }
