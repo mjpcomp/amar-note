@@ -838,7 +838,8 @@ void handleOtaCheck() {
     return;
   }
   String latestTag, assetUrl;
-  bool newer = otaCheckGithub(latestTag, assetUrl);
+  size_t assetSize = 0;
+  bool newer = otaCheckGithub(latestTag, assetUrl, assetSize);
   if (latestTag.length() == 0) {
     transferServer.sendHeader("Location", "/ota?err=1");
     transferServer.send(303);
@@ -849,6 +850,7 @@ void handleOtaCheck() {
     transferServer.send(303);
     return;
   }
+  // Encode the asset URL for safe embedding in a query param
   String enc = "";
   for (int i = 0; i < (int)assetUrl.length(); i++) {
     char c = assetUrl[i];
@@ -859,7 +861,9 @@ void handleOtaCheck() {
       enc += buf;
     }
   }
-  transferServer.sendHeader("Location", "/ota?update=1&tag=" + latestTag + "&url=" + enc);
+  // Pass the true binary size along so /ota/run can hand it to otaTask
+  transferServer.sendHeader("Location",
+    "/ota?update=1&tag=" + latestTag + "&url=" + enc + "&sz=" + String((unsigned)assetSize));
   transferServer.send(303);
 }
 
@@ -871,6 +875,7 @@ void handleOtaPage() {
   String prefillUrl = hasUpdate ? urlDecodeSimple(transferServer.arg("url")) : "";
   String latestTag  = hasUpdate ? transferServer.arg("tag") :
                       (upToDate ? transferServer.arg("latest") : "");
+  String prefillSz  = hasUpdate && transferServer.hasArg("sz") ? transferServer.arg("sz") : "0";
 
   String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -914,6 +919,8 @@ void handleOtaPage() {
   html += "<form action='/ota/run' method='post'>";
   html += "<div class='form-section'><label class='form-label'>Firmware URL</label>";
   html += "<input type='url' name='url' placeholder='https://host/amar-note.bin' value='" + htmlEscape(prefillUrl) + "'></div>";
+  // Hidden field carries the true binary size for accurate progress reporting
+  html += "<input type='hidden' name='sz' value='" + prefillSz + "'>";
   html += "<button type='submit' class='btn primary'>Flash firmware</button>";
   html += "</form>";
   html += "<hr class='divider'>";
@@ -927,9 +934,10 @@ void handleOtaPage() {
 }
 
 // ─── OTA background task ─────────────────────────────────────────────────────
-// Holds the URL as a static buffer so the FreeRTOS task can access it safely
-// after handleOtaRun() returns.
-static char s_otaUrl[512];
+// Holds the URL and asset size as statics so the FreeRTOS task can access them
+// safely after handleOtaRun() returns.
+static char   s_otaUrl[512];
+static size_t s_otaAssetSize = 0;
 
 static void otaTask(void* /*param*/) {
   g_otaStage = "downloading";
@@ -939,6 +947,7 @@ static void otaTask(void* /*param*/) {
 
   bool ok = otaDownloadAndFlash(
     String(s_otaUrl),
+    s_otaAssetSize,
     [](size_t done, size_t total) {
       int pct = (total > 0) ? (int)constrain((done * 100) / total, 0, 99) : 0;
       g_otaPct = pct;
@@ -974,6 +983,9 @@ void handleOtaRun() {
     transferServer.send(400, "text/plain", "URL too long"); return;
   }
   strlcpy(s_otaUrl, url.c_str(), sizeof(s_otaUrl));
+
+  // Recover the true binary size posted by the form (0 if pasted manually)
+  s_otaAssetSize = transferServer.hasArg("sz") ? (size_t)transferServer.arg("sz").toInt() : 0;
 
   // Reset progress so the browser poll starts fresh
   g_otaPct   = 0;
