@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // You normally do NOT need to edit this file.
 //
-// Forrest Note is provisioned at runtime over its Wi-Fi setup hotspot
+// Amar Note is provisioned at runtime over its Wi-Fi setup hotspot
 // (see the README → "Setup"). Leave the "...." placeholders below and the
 // firmware will boot straight into setup mode on first launch.
 //
@@ -17,8 +17,12 @@
 //     here would end up in your git history. Prefer the hotspot portal.
 // ─────────────────────────────────────────────────────────────────────────────
 
-#define WIFI_SSID   "...."   // your 2.4 GHz Wi-Fi name   (or leave as "...." )
-#define WIFI_PASS   "...."   // your Wi-Fi password       (or leave as "...." )
-#define OPENAI_KEY  "...."   // OpenAI API key            (or leave as "...." )
+#define WIFI_SSID      "...."   // your 2.4 GHz Wi-Fi name        (or leave as "....")
+#define WIFI_PASS      "...."   // your Wi-Fi password            (or leave as "....")
+#define OPENAI_KEY     "...."   // OpenAI API key                 (or leave as "....")
+#define GITHUB_TOKEN   "...."   // GitHub personal access token   (or leave as "....")
+                                // Used for OTA updates and vault sync.
+                                // Needs Contents: Read on mjpcomp/amar-note for OTA;
+                                // add Contents: Write on your vault repo for sync.
 
 #endif
