@@ -114,11 +114,28 @@ jobs:
             --export-binaries \
             amar_note/amar_note.ino
 
-      # ── 12. Rename binary ───────────────────────────────────────────────
-      - name: Rename binary
+      # ── 12. Locate and rename binary ─────────────────────────────────────
+      # arduino-cli --export-binaries produces several .bin files:
+      #   *.ino.bin           — the standalone application binary  ← this is the OTA target
+      #   *.ino.merged.bin    — full flash image (bootloader + ptable + app concatenated)
+      #   *.ino.bootloader.bin
+      #   *.ino.partitions.bin
+      #
+      # OTA via Update.h requires ONLY the application binary.
+      # Flashing the merged image into the app partition corrupts the
+      # ESP-IDF image header and causes "efuse chip revision" errors at boot.
+      - name: Locate and rename binary
         run: |
-          BIN=$(find amar_note/build -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -1)
-          echo "Found binary: $BIN"
+          echo "=== Build output ==="
+          find amar_note/build -name '*.bin' | sort
+          echo "===================="
+          # Target exactly *.ino.bin — excludes merged, bootloader, partitions
+          BIN=$(find amar_note/build -name '*.ino.bin' | head -1)
+          if [ -z "$BIN" ]; then
+            echo "::error::Could not find *.ino.bin in build output"
+            exit 1
+          fi
+          echo "Using binary: $BIN  ($(wc -c < "$BIN") bytes)"
           cp "$BIN" amar-note-firmware.bin
 
       # ── 13. Create GitHub Release with .bin ───────────────────────────
