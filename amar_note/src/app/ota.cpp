@@ -9,7 +9,7 @@
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 static bool isNewer(const String& remoteTag, const String& localTag) {
   auto parseVer = [](const String& tag, int& maj, int& min, int& pat) {
@@ -29,7 +29,7 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
   return rpat > lpat;
 }
 
-// ─── otaCheckGithub ──────────────────────────────────────────────────────────────────────
+// ─── otaCheckGithub ───────────────────────────────────────────────────────────
 bool otaCheckGithub(String& latestTag, String& assetUrl) {
   const char* host = "api.github.com";
   String path = "/repos/" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "/releases/latest";
@@ -109,11 +109,49 @@ bool otaCheckGithub(String& latestTag, String& assetUrl) {
   return isNewer(latestTag, FIRMWARE_VERSION);
 }
 
-// ─── otaDownloadAndFlash ─────────────────────────────────────────────────────────────────────
+// ─── flash helper ─────────────────────────────────────────────────────────────
+// Streams bytes from `client` into the OTA partition.
+// Uses UPDATE_SIZE_UNKNOWN so Update.begin() sizes itself against the actual
+// partition — avoids "Bad Size Given" when Content-Length equals the full
+// flash capacity rather than the firmware binary size.
+static bool streamToFlash(WiFiClientSecure& client, size_t contentLength,
+                           void (*progressCb)(size_t, size_t),
+                           uint32_t timeoutMs = 120000) {
+  if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+    Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
+    return false;
+  }
+
+  uint8_t buf[1024];
+  size_t written = 0;
+  uint32_t deadline = millis() + timeoutMs;
+
+  while (client.available() || (client.connected() && millis() < deadline)) {
+    if (!client.available()) { delay(5); continue; }
+    int n = client.read(buf, sizeof(buf));
+    if (n <= 0) continue;
+    if (Update.write(buf, n) != (size_t)n) {
+      Serial.printf("[OTA] write error: %s\n", Update.errorString());
+      Update.abort();
+      return false;
+    }
+    written += n;
+    if (progressCb) progressCb(written, contentLength);
+  }
+
+  if (!Update.end(true)) {
+    Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
+    return false;
+  }
+  Serial.printf("[OTA] flash complete (%u bytes)\n", (unsigned)written);
+  return true;
+}
+
+// ─── otaDownloadAndFlash ──────────────────────────────────────────────────────
 //
 // Downloads firmware from a browser_download_url (github.com release CDN).
 // No auth required for public repos. GitHub redirects github.com/releases/...
-// to objects.githubusercontent.com with a short-lived signed URL.
+// to release-assets.githubusercontent.com with a short-lived signed URL.
 // We follow that single 302 and stream the binary directly into the inactive
 // OTA partition via Update.h.
 bool otaDownloadAndFlash(const String& browserDownloadUrl,
@@ -124,12 +162,33 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
     return false;
   }
 
-  // Parse host + path from the URL.
   auto parseUrl = [](const String& url, String& host, String& path) {
     String rest = url.substring(8); // strip "https://"
     int slash = rest.indexOf('/');
     host = (slash >= 0) ? rest.substring(0, slash) : rest;
     path = (slash >= 0) ? rest.substring(slash) : "/";
+  };
+
+  // ── helper: read HTTP response headers from a connected client ────────────
+  auto readHeaders = [](WiFiClientSecure& c, int& code, size_t& clen, String& loc,
+                        uint32_t timeoutMs) {
+    uint32_t deadline = millis() + timeoutMs;
+    while (!c.available() && millis() < deadline) delay(20);
+    while (c.available() || (c.connected() && millis() < deadline)) {
+      if (!c.available()) { delay(5); continue; }
+      String line = c.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0) break;
+      if (line.startsWith("HTTP/")) {
+        int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
+        code = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
+      } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
+        clen = (size_t)line.substring(line.indexOf(':') + 1).toInt();
+      } else if ((line.startsWith("Location:") || line.startsWith("location:")) && loc.length() == 0) {
+        loc = line.substring(line.indexOf(':') + 1);
+        loc.trim();
+      }
+    }
   };
 
   String host, path;
@@ -146,8 +205,6 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
     return false;
   }
 
-  // No Authorization header needed — browser_download_url is public on
-  // public repos. GitHub will 302 us to the signed CDN URL.
   client.printf(
     "GET %s HTTP/1.1\r\n"
     "Host: %s\r\n"
@@ -156,41 +213,18 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
     path.c_str(), host.c_str()
   );
 
-  // ── Read response headers ──────────────────────────────────────────────────────────────
-  uint32_t deadline = millis() + 20000;
-  while (!client.available() && millis() < deadline) delay(20);
-
   int httpCode = 0;
   size_t contentLength = 0;
-  String location = "";
-
-  while (client.available() || (client.connected() && millis() < deadline)) {
-    if (!client.available()) { delay(5); continue; }
-    String line = client.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) break;
-    if (line.startsWith("HTTP/")) {
-      int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
-      httpCode = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
-    } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
-      contentLength = (size_t)line.substring(line.indexOf(':') + 1).toInt();
-    } else if ((line.startsWith("Location:") || line.startsWith("location:")) && location.length() == 0) {
-      location = line.substring(line.indexOf(':') + 1);
-      location.trim();
-    }
-  }
-
+  String location;
+  readHeaders(client, httpCode, contentLength, location, 20000);
   Serial.printf("[OTA] HTTP %d  content-length=%u\n", httpCode, (unsigned)contentLength);
 
-  // ── Follow one redirect (github.com → objects.githubusercontent.com) ─────────
+  // ── Follow one redirect ───────────────────────────────────────────────────
   if (httpCode >= 300 && httpCode < 400) {
     client.stop();
-    if (location.length() == 0) {
-      Serial.println("[OTA] redirect with no Location"); return false;
-    }
-    if (!location.startsWith("https://")) {
-      Serial.println("[OTA] non-HTTPS redirect"); return false;
-    }
+    if (location.length() == 0) { Serial.println("[OTA] redirect with no Location"); return false; }
+    if (!location.startsWith("https://")) { Serial.println("[OTA] non-HTTPS redirect"); return false; }
+
     Serial.printf("[OTA] following redirect to: %s\n", location.c_str());
 
     String rHost, rPath;
@@ -211,89 +245,26 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
       rPath.c_str(), rHost.c_str()
     );
 
-    deadline = millis() + 20000;
-    while (!c2.available() && millis() < deadline) delay(20);
-
-    httpCode = 0; contentLength = 0;
-    while (c2.available() || (c2.connected() && millis() < deadline)) {
-      if (!c2.available()) { delay(5); continue; }
-      String line = c2.readStringUntil('\n'); line.trim();
-      if (line.length() == 0) break;
-      if (line.startsWith("HTTP/")) {
-        int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
-        httpCode = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
-      } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
-        contentLength = (size_t)line.substring(line.indexOf(':') + 1).toInt();
-      }
-    }
+    httpCode = 0; contentLength = 0; location = "";
+    readHeaders(c2, httpCode, contentLength, location, 20000);
     Serial.printf("[OTA] CDN HTTP %d  size=%u\n", httpCode, (unsigned)contentLength);
+
     if (httpCode != 200) {
       Serial.printf("[OTA] CDN error %d\n", httpCode); c2.stop(); return false;
     }
-    if (contentLength == 0) {
-      Serial.println("[OTA] no content-length from CDN"); c2.stop(); return false;
-    }
 
-    if (!Update.begin(contentLength, U_FLASH)) {
-      Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
-      c2.stop(); return false;
-    }
-    uint8_t buf[1024];
-    size_t written = 0;
-    deadline = millis() + 120000;
-    while (written < contentLength && (c2.available() || (c2.connected() && millis() < deadline))) {
-      if (!c2.available()) { delay(5); continue; }
-      int n = c2.read(buf, sizeof(buf));
-      if (n <= 0) continue;
-      if (Update.write(buf, n) != (size_t)n) {
-        Serial.printf("[OTA] write error: %s\n", Update.errorString());
-        Update.abort(); c2.stop(); return false;
-      }
-      written += n;
-      if (progressCb) progressCb(written, contentLength);
-    }
+    bool ok = streamToFlash(c2, contentLength, progressCb);
     c2.stop();
-    if (!Update.end(true)) {
-      Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
-      return false;
-    }
-    Serial.printf("[OTA] flash complete (%u bytes)\n", (unsigned)written);
-    return true;
+    return ok;
   }
 
-  // ── No redirect — 200 directly (unlikely for github.com but handle it) ────────
+  // ── Direct 200 (no redirect) ──────────────────────────────────────────────
   if (httpCode != 200) {
     Serial.printf("[OTA] unexpected HTTP %d\n", httpCode);
     client.stop(); return false;
   }
-  if (contentLength == 0) {
-    Serial.println("[OTA] no content-length");
-    client.stop(); return false;
-  }
 
-  if (!Update.begin(contentLength, U_FLASH)) {
-    Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
-    client.stop(); return false;
-  }
-  uint8_t buf[1024];
-  size_t written = 0;
-  deadline = millis() + 120000;
-  while (written < contentLength && (client.available() || (client.connected() && millis() < deadline))) {
-    if (!client.available()) { delay(5); continue; }
-    int n = client.read(buf, sizeof(buf));
-    if (n <= 0) continue;
-    if (Update.write(buf, n) != (size_t)n) {
-      Serial.printf("[OTA] write error: %s\n", Update.errorString());
-      Update.abort(); client.stop(); return false;
-    }
-    written += n;
-    if (progressCb) progressCb(written, contentLength);
-  }
+  bool ok = streamToFlash(client, contentLength, progressCb);
   client.stop();
-  if (!Update.end(true)) {
-    Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
-    return false;
-  }
-  Serial.printf("[OTA] flash complete (%u bytes)\n", (unsigned)written);
-  return true;
+  return ok;
 }
