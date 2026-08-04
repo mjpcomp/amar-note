@@ -14,6 +14,7 @@ Tap a button, talk, tap again. A few seconds later a tidy Markdown note — with
 - **Verbatim safety net:** the original raw transcript is tucked into a foldable callout, so nothing you said is ever lost.
 - **Syncs to GitHub** as clean Markdown with YAML frontmatter and tags — drop it into **Obsidian** and your notes organise themselves.
 - **USB Mass Storage** — mount the device's SD card directly on your computer, no cables or apps required.
+- **Over-the-air firmware updates** — check for new releases and flash directly from the portal. No USB required after the first install.
 - **No app, no account lock-in, no cloud middleman** — it talks directly to your chosen STT and enrichment providers and to *your* GitHub repo.
 
 ---
@@ -65,6 +66,9 @@ Credit where it's due — the original firmware already provided: voice **record
 | 🗄️ **NVS namespace** | 🔁 Changed | NVS partition namespace renamed `forrest` → `amar`. ⚠️ Existing devices need a flash-erase on first install of this firmware. |
 | 💾 **USB Mass Storage** | ➕ New | Menu item **"USB Drive"** mounts the SD card as a USB MSC drive on any host computer — browse, copy, or delete files directly. Hold REC to exit MSC mode; the SD remounts and the note index reloads automatically. Requires ESP32 Arduino core ≥ 2.0. |
 | 🕒 **Portable UTC epoch conversion** | 🔁 Changed | `utcTmToEpoch()` now uses a portable `mktime()` emulation (TZ save/restore) instead of `timegm()`, which is not available in the ESP32 Arduino/ESP-IDF toolchain. |
+| 🔄 **Fully functional OTA updates** | 🔁 Fixed | OTA was wired to `HTTPUpdate` (no GitHub auth, blocking loop). Replaced with a hand-rolled `otaDownloadAndFlash()` that handles GitHub auth + CDN redirect + `Update.h` flashing, runs in a FreeRTOS task so the web server stays live, and drives a real-time progress bar on both the device e-paper screen and the browser. |
+| 🔃 **GitHub release auto-check** | ➕ New | Portal **Check GitHub** button (`/ota/check`) fetches the latest release tag from the GitHub API, compares it to the running firmware version, and pre-fills the asset download URL automatically — one click to flash an update. |
+| 🗑️ **Reset options** | ➕ New | **Settings → Reset** offers three levels: **Reboot** (soft restart), **Reset Settings** (wipes NVS credentials — Wi-Fi, API keys, GitHub token — while leaving notes intact), and **Factory Reset** (wipes NVS + all notes on the SD card, with an optional Device+GitHub vault wipe). Useful for re-provisioning or handing off a device. |
 | 🐱 **Tamagotchi** | ➕ New | Sixth menu tile (cursor 5) — cat-face icon, `STATE_TAMAGOTCHI` state, `showTamagotchi()` stub screen. Pet logic ships in its own module; the tile and screen are fully wired. Based on **[pala-nekogotchi](https://github.com/defcon1702/pala-nekogotchi)** by defcon1702 — an offline virtual cat designed for this hardware, with real-time RTC aging, mood states, and 1-bit pixel-art sprites. |
 
 ### Third-party addons & acknowledgements
@@ -192,6 +196,8 @@ arduino-cli compile --upload -p /dev/cu.usbmodemXXXX \
   ./amar_note
 ```
 
+> **After the first flash you can use OTA** — go to the portal `/ota` page and tap **Check GitHub** to find and install updates without a USB cable.
+
 ---
 
 ## 🔧 Setup — provision over the hotspot
@@ -223,7 +229,7 @@ A **tap** is any press released before the long-hold threshold (~450 ms); a **lo
 | **Back** | Long-hold **record** |
 | **Play back a recording** | Tap **record** while viewing a note |
 | **Delete a note** | Long-hold **power** while viewing a note |
-| **Erase all notes** | **Settings → Erase All** |
+| **Erase all notes** | **Settings → Reset → Factory Reset** |
 | **Wake to menu** | Hold **power** while powering on |
 | **Wake straight to record** | Hold **record** while powering on |
 | **USB Drive mode** | Menu → **USB Drive** → tap **record** → hold **record** to exit |
@@ -288,6 +294,48 @@ safely eject before
 The SD card appears on your host computer as a standard USB drive — browse, copy, rename, or delete files directly. When done, safely eject from your OS, then hold **record** on the device to exit. The SD card remounts automatically and the note index reloads.
 
 > **Requirement:** ESP32 Arduino core ≥ 2.0 (for `USB.h` / `USBMSC.h`). The board must be connected via USB-C to a host that supports USB OTG device mode.
+
+---
+
+## 🔄 Over-the-air updates (OTA)
+
+Amar Note can update its own firmware over Wi-Fi — no USB cable required after the first install.
+
+### How it works
+
+1. Connect to the device portal at `http://<device-ip>/ota` (or tap **update** in the portal nav).
+2. Tap **Check GitHub** — the device queries the GitHub Releases API, compares the latest release tag to the running firmware version, and pre-fills the asset download URL if a newer version is found.
+3. Tap **Flash firmware**. The device:
+   - Authenticates to the GitHub asset URL using your stored GitHub token.
+   - Follows the CDN redirect to the compiled `.bin` file.
+   - Streams the binary directly into the inactive OTA partition via `Update.h`.
+   - Shows a live progress bar on the **e-paper screen** and in the **browser** (polled via `/api/ota-progress`).
+   - Reboots into the new firmware automatically when done.
+4. If anything goes wrong mid-flash, the device stays on the current firmware — the inactive partition is only activated on a clean `Update.end()`.
+
+> **Keep the device plugged in during an update.** The OTA process runs in a FreeRTOS background task so the web server stays responsive throughout — you can still navigate the portal while the flash is in progress.
+
+### Manual flash
+
+You can also paste any HTTPS `.bin` URL directly into the **Firmware URL** field and tap **Flash firmware** — useful for flashing a custom build or a pre-release binary without it being on a GitHub release.
+
+---
+
+## 🗑️ Reset options
+
+**Settings → Reset** provides three levels of reset, selectable from the device menu:
+
+| Option | What it wipes | Use case |
+|---|---|---|
+| **Reboot** | Nothing — soft restart only | Fix a hung state without losing anything |
+| **Reset Settings** | NVS credentials (Wi-Fi, API keys, GitHub token) — notes stay intact | Re-provision the device with new credentials; hand off to someone else |
+| **Factory Reset** | NVS credentials + all notes on the SD card | Full wipe; optionally also deletes the GitHub vault folder |
+
+The **Factory Reset** confirmation screen offers two sub-options:
+- **Device only** — wipes the SD card notes locally; the GitHub vault is untouched.
+- **Device + GitHub** — wipes local notes and sends delete requests for all note files in the configured vault folder on GitHub.
+
+> ⚠️ Factory Reset is irreversible. Notes deleted from the SD card cannot be recovered. If **Device + GitHub** is chosen, the vault folder contents are permanently deleted from the repo.
 
 ---
 
@@ -399,3 +447,5 @@ Timezone is set at compile time via `DEVICE_TZ_POSIX` in `config.h`. The default
 - **Wrong timestamps on notes** → update `DEVICE_TZ_POSIX` in `config.h` to match your timezone and reflash.
 - **Enrichment silently skipped** → confirm the correct API key is set for your chosen `enrichprov`. Check the serial monitor — the firmware logs which provider it is trying and why it skipped.
 - **NVS namespace mismatch after upgrading from Forrest Note** → the namespace changed from `forrest` to `amar`. Do a full flash-erase (`esptool.py erase_flash`) before flashing Amar Note for the first time, then re-provision via the portal.
+- **OTA stuck on "Connecting"** → ensure your GitHub token (`ghtok`) is set in the portal — the OTA download requires it to authenticate the release asset. Check the serial monitor for `[OTA]` log lines to see the HTTP status returned.
+- **OTA flash failed** → the device stays on the current firmware automatically. Check the serial monitor for `[OTA] CDN HTTP` and `Update.begin/write/end` error strings. Most common cause is a low-battery condition mid-flash — keep the device plugged in.
