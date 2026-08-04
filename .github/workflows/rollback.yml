@@ -1,0 +1,120 @@
+# Amar Note — Rollback workflow
+#
+# Run from Actions > "Rollback Release" > "Run workflow".
+# Enter the version to REMOVE and the version to DOWNGRADE TO, then click Run.
+#
+# What it does:
+#   1. Deletes the GitHub Release for <remove_version>
+#   2. Deletes the matching git tag
+#   3. Reverts FIRMWARE_VERSION in config.h to <downgrade_to_version>
+#   4. Commits + pushes that revert
+#   5. Cancels every other in-progress or queued Actions run
+#      (so a stale release.yml triggered by the tag push doesn't re-release)
+
+name: Rollback Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      remove_version:
+        description: 'Version to DELETE — e.g. 1.5.2 (no leading v)'
+        required: true
+        type: string
+      downgrade_to:
+        description: 'Version to REVERT config.h to — e.g. 1.5.1 (no leading v)'
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # delete releases, tags, push commit
+      actions: write    # cancel workflow runs
+
+    steps:
+      # ── 1. Validate both version strings ─────────────────────────────────
+      - name: Validate inputs
+        run: |
+          for V in "${{ github.event.inputs.remove_version }}" "${{ github.event.inputs.downgrade_to }}"; do
+            if ! echo "$V" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+              echo "::error::Version '$V' must be in format X.Y or X.Y.Z — no leading v"
+              exit 1
+            fi
+          done
+
+      # ── 2. Delete GitHub Release ──────────────────────────────────────────
+      - name: Delete GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ github.event.inputs.remove_version }}"
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
+            --jq ".[] | select(.tag_name==\"$TAG\") | .id" 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID
+            echo "Deleted release $RELEASE_ID ($TAG)"
+          else
+            echo "No release found for $TAG — skipping"
+          fi
+
+      # ── 3. Delete git tag (remote) ────────────────────────────────────────
+      - name: Delete git tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ github.event.inputs.remove_version }}"
+          HTTP_STATUS=$(gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/$TAG \
+            --silent -w '%{http_code}' 2>/dev/null || echo "404")
+          if [ "$HTTP_STATUS" = "204" ] || [ -z "$HTTP_STATUS" ]; then
+            echo "Deleted tag $TAG"
+          else
+            echo "Tag $TAG not found or already deleted (HTTP $HTTP_STATUS) — skipping"
+          fi
+
+      # ── 4. Checkout + revert FIRMWARE_VERSION ────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Revert FIRMWARE_VERSION in config.h
+        run: |
+          NEW_VER="v${{ github.event.inputs.downgrade_to }}"
+          sed -i "s|#define FIRMWARE_VERSION  \"v[^\"]*\"|#define FIRMWARE_VERSION  \"$NEW_VER\"|" amar_note/config.h
+          echo "config.h now reads:"
+          grep FIRMWARE_VERSION amar_note/config.h
+
+      - name: Commit version revert
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add amar_note/config.h
+          if git diff --cached --quiet; then
+            echo "config.h already at target version — no commit needed"
+          else
+            git commit -m "chore: rollback FIRMWARE_VERSION to v${{ github.event.inputs.downgrade_to }} (removed v${{ github.event.inputs.remove_version }})"
+            git push
+          fi
+
+      # ── 5. Cancel all other in-progress / queued runs ────────────────────
+      # Prevents a stale release.yml or a second rollback from firing while
+      # this one is still settling.
+      - name: Cancel other in-progress and queued runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          THIS_RUN=${{ github.run_id }}
+          echo "Current run ID: $THIS_RUN — will not cancel self"
+
+          gh api repos/${{ github.repository }}/actions/runs \
+            --jq ".workflow_runs[] | select(.status==\"in_progress\" or .status==\"queued\") | .id" \
+          | while read RUN_ID; do
+            if [ "$RUN_ID" != "$THIS_RUN" ]; then
+              gh api -X POST repos/${{ github.repository }}/actions/runs/$RUN_ID/cancel \
+                --silent && echo "Cancelled run $RUN_ID" \
+                         || echo "Could not cancel run $RUN_ID (may have already finished)"
+            fi
+          done
+
+          echo "Done."
