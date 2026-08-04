@@ -980,7 +980,8 @@ void handleOtaRun() {
   g_otaStage = "connecting";
 
   // Send the browser page immediately — the web server stays alive because
-  // the actual flash runs in a separate FreeRTOS task on core 0.
+  // the actual flash runs in a separate FreeRTOS task on core 1 (required
+  // for WiFiClientSecure — all Wi-Fi/TCP stack calls must run on core 1).
   transferServer.send(200, "text/html",
     "<!doctype html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1017,16 +1018,17 @@ void handleOtaRun() {
     "</script>"
     "</body></html>");
 
-  // Spawn the OTA task on core 0 (network on core 1, app on core 0 — flash
-  // write goes to core 0 which has access to the SPI flash partition API).
+  // Spawn the OTA task on core 1 — WiFiClientSecure MUST run on the Wi-Fi
+  // stack core (core 1). Running it on core 0 causes a silent connect failure.
+  // Stack bumped to 20480 bytes: TLS handshake + redirect-follow path needs ~12-16 KB.
   xTaskCreatePinnedToCore(
     otaTask,
     "otaTask",
-    8192,   // stack — otaDownloadAndFlash uses ~3-4 KB
+    20480,  // stack — TLS + otaDownloadAndFlash needs ~12-16 KB
     nullptr,
     1,      // priority
     nullptr,
-    0       // core 0
+    1       // core 1 — required for WiFiClientSecure
   );
 }
 
