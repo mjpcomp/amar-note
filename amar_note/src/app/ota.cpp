@@ -9,7 +9,7 @@
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 static bool isNewer(const String& remoteTag, const String& localTag) {
   auto parseVer = [](const String& tag, int& maj, int& min, int& pat) {
@@ -29,7 +29,7 @@ static bool isNewer(const String& remoteTag, const String& localTag) {
   return rpat > lpat;
 }
 
-// ─── otaCheckGithub ───────────────────────────────────────────────────────────
+// ─── otaCheckGithub ──────────────────────────────────────────────────────────
 bool otaCheckGithub(String& latestTag, String& assetUrl, size_t& assetSize) {
   const char* host = "api.github.com";
   String path = "/repos/" OTA_GITHUB_OWNER "/" OTA_GITHUB_REPO "/releases/latest";
@@ -44,8 +44,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl, size_t& assetSize) {
     return false;
   }
 
-  // Token is optional — used only to avoid GitHub API rate-limits (60 req/hr
-  // unauthenticated vs 5000/hr authenticated). Not required for public repos.
   String tok = cfg::githubToken();
   String authHeader = (tok.length() > 0) ? "Authorization: Bearer " + tok + "\r\n" : "";
 
@@ -88,10 +86,6 @@ bool otaCheckGithub(String& latestTag, String& assetUrl, size_t& assetSize) {
   latestTag = doc["tag_name"] | "";
   if (latestTag.length() == 0) { Serial.println("[OTA] no tag_name"); return false; }
 
-  // Use browser_download_url — the direct github.com CDN URL.
-  // Also capture the asset `size` field — this is the true firmware binary
-  // byte count and must be used for progress reporting. The CDN Content-Length
-  // reflects the full flash capacity (8388608), not the .bin size.
   assetSize = 0;
   JsonArray assets = doc["assets"].as<JsonArray>();
   for (JsonObject asset : assets) {
@@ -113,14 +107,22 @@ bool otaCheckGithub(String& latestTag, String& assetUrl, size_t& assetSize) {
   return isNewer(latestTag, FIRMWARE_VERSION);
 }
 
-// ─── streamToFlash ────────────────────────────────────────────────────────────────
+// ─── streamToFlash ───────────────────────────────────────────────────────────────
 //
-// Streams bytes from `client` into the OTA partition until the connection
-// closes. Uses UPDATE_SIZE_UNKNOWN so the partition sizes itself rather than
-// rejecting the CDN Content-Length (which equals full flash capacity).
+// Streams bytes from `client` into the OTA partition.
+//
+// chunked=true  : server sent Transfer-Encoding: chunked (HTTP/1.1 default).
+//   Each chunk is preceded by a hex size line + CRLF and followed by CRLF.
+//   We strip those framing bytes before passing data to Update.write().
+//   A chunk size of 0 signals end-of-body.
+//
+// chunked=false : server sent Content-Length with a plain body (HTTP/1.0
+//   style or Connection: close without chunking). Read until close.
+//
 // `totalBytes` is the true firmware size from the GitHub API JSON — used
-// only as the denominator for progressCb, not to control the read loop.
+// only as the denominator for progressCb.
 static bool streamToFlash(WiFiClientSecure& client, size_t totalBytes,
+                           bool chunked,
                            void (*progressCb)(size_t, size_t),
                            uint32_t timeoutMs = 120000) {
   if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
@@ -128,28 +130,64 @@ static bool streamToFlash(WiFiClientSecure& client, size_t totalBytes,
     return false;
   }
 
-  uint8_t buf[1024];
   size_t written = 0;
   uint32_t deadline = millis() + timeoutMs;
 
-  // Read until the server closes the connection — do NOT use totalBytes or
-  // Content-Length to gate the loop, because the CDN Content-Length is the
-  // full flash size, not the firmware size. Connection close is the only
-  // reliable EOF signal here.
-  while (client.available() || (client.connected() && millis() < deadline)) {
-    if (!client.available()) { delay(5); continue; }
-    int n = client.read(buf, sizeof(buf));
-    if (n <= 0) continue;
-    if (Update.write(buf, n) != (size_t)n) {
-      Serial.printf("[OTA] write error: %s\n", Update.errorString());
-      Update.abort();
-      return false;
+  if (chunked) {
+    // ── RFC 7230 §4.1 chunked decoding ────────────────────────────────────
+    // Format: <hex-size>CRLF <data>CRLF  ...  0CRLF CRLF
+    uint8_t buf[1024];
+    while (millis() < deadline) {
+      // Wait for at least one byte (chunk-size line)
+      while (!client.available() && client.connected() && millis() < deadline) delay(5);
+      if (!client.available()) break;
+
+      // Read chunk-size line (hex digits, possibly followed by chunk-extension, then CRLF)
+      String sizeLine = client.readStringUntil('\n');
+      sizeLine.trim();
+      // Strip any chunk-extension (";") before parsing
+      int semi = sizeLine.indexOf(';');
+      if (semi >= 0) sizeLine = sizeLine.substring(0, semi);
+      size_t chunkSize = (size_t)strtoul(sizeLine.c_str(), nullptr, 16);
+
+      if (chunkSize == 0) break;  // last-chunk
+
+      // Read exactly chunkSize bytes
+      size_t remaining = chunkSize;
+      while (remaining > 0 && millis() < deadline) {
+        while (!client.available() && client.connected() && millis() < deadline) delay(5);
+        if (!client.available()) break;
+        size_t toRead = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        int n = client.read(buf, toRead);
+        if (n <= 0) continue;
+        if (Update.write(buf, n) != (size_t)n) {
+          Serial.printf("[OTA] write error: %s\n", Update.errorString());
+          Update.abort(); return false;
+        }
+        written += n;
+        remaining -= n;
+        if (progressCb) progressCb(written, totalBytes > 0 ? totalBytes : written);
+      }
+      // Consume trailing CRLF after chunk data
+      client.readStringUntil('\n');
     }
-    written += n;
-    // Use the API-reported size for progress so the bar reflects real progress.
-    // Falls back to written bytes as total if assetSize was 0.
-    if (progressCb) progressCb(written, totalBytes > 0 ? totalBytes : written);
+  } else {
+    // ── Plain body: read until connection closes ───────────────────────────
+    uint8_t buf[1024];
+    while (client.available() || (client.connected() && millis() < deadline)) {
+      if (!client.available()) { delay(5); continue; }
+      int n = client.read(buf, sizeof(buf));
+      if (n <= 0) continue;
+      if (Update.write(buf, n) != (size_t)n) {
+        Serial.printf("[OTA] write error: %s\n", Update.errorString());
+        Update.abort(); return false;
+      }
+      written += n;
+      if (progressCb) progressCb(written, totalBytes > 0 ? totalBytes : written);
+    }
   }
+
+  Serial.printf("[OTA] written %u bytes\n", (unsigned)written);
 
   if (!Update.end(true)) {
     Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
@@ -159,13 +197,7 @@ static bool streamToFlash(WiFiClientSecure& client, size_t totalBytes,
   return true;
 }
 
-// ─── otaDownloadAndFlash ──────────────────────────────────────────────────────
-//
-// Downloads firmware from a browser_download_url (github.com release CDN).
-// No auth required for public repos. GitHub redirects github.com/releases/...
-// to release-assets.githubusercontent.com with a short-lived signed URL.
-// We follow that single 302 and stream the binary directly into the inactive
-// OTA partition via Update.h.
+// ─── otaDownloadAndFlash ──────────────────────────────────────────────────────────
 bool otaDownloadAndFlash(const String& browserDownloadUrl,
                          size_t assetSize,
                          void (*progressCb)(size_t, size_t)) {
@@ -176,14 +208,15 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
   }
 
   auto parseUrl = [](const String& url, String& host, String& path) {
-    String rest = url.substring(8); // strip "https://"
+    String rest = url.substring(8);
     int slash = rest.indexOf('/');
     host = (slash >= 0) ? rest.substring(0, slash) : rest;
     path = (slash >= 0) ? rest.substring(slash) : "/";
   };
 
-  auto readHeaders = [](WiFiClientSecure& c, int& code, size_t& clen, String& loc,
-                        uint32_t timeoutMs) {
+  // Captures status, Content-Length, Location, and Transfer-Encoding
+  auto readHeaders = [](WiFiClientSecure& c, int& code, size_t& clen,
+                        String& loc, bool& isChunked, uint32_t timeoutMs) {
     uint32_t deadline = millis() + timeoutMs;
     while (!c.available() && millis() < deadline) delay(20);
     while (c.available() || (c.connected() && millis() < deadline)) {
@@ -194,11 +227,20 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
       if (line.startsWith("HTTP/")) {
         int s1 = line.indexOf(' '), s2 = line.indexOf(' ', s1 + 1);
         code = line.substring(s1 + 1, s2 > 0 ? s2 : line.length()).toInt();
-      } else if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
-        clen = (size_t)line.substring(line.indexOf(':') + 1).toInt();
-      } else if ((line.startsWith("Location:") || line.startsWith("location:")) && loc.length() == 0) {
-        loc = line.substring(line.indexOf(':') + 1);
-        loc.trim();
+      } else {
+        // Case-insensitive header matching
+        String lline = line;
+        lline.toLowerCase();
+        if (lline.startsWith("content-length:")) {
+          clen = (size_t)line.substring(line.indexOf(':') + 1).toInt();
+        } else if (lline.startsWith("location:") && loc.length() == 0) {
+          loc = line.substring(line.indexOf(':') + 1);
+          loc.trim();
+        } else if (lline.startsWith("transfer-encoding:")) {
+          String te = line.substring(line.indexOf(':') + 1);
+          te.trim(); te.toLowerCase();
+          if (te == "chunked") isChunked = true;
+        }
       }
     }
   };
@@ -228,11 +270,12 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
   int httpCode = 0;
   size_t contentLength = 0;
   String location;
-  readHeaders(client, httpCode, contentLength, location, 20000);
-  Serial.printf("[OTA] HTTP %d  content-length=%u  asset-size=%u\n",
-                httpCode, (unsigned)contentLength, (unsigned)assetSize);
+  bool isChunked = false;
+  readHeaders(client, httpCode, contentLength, location, isChunked, 20000);
+  Serial.printf("[OTA] HTTP %d  content-length=%u  asset-size=%u  chunked=%d\n",
+                httpCode, (unsigned)contentLength, (unsigned)assetSize, (int)isChunked);
 
-  // ── Follow one redirect ───────────────────────────────────────────────────
+  // ── Follow one redirect ──────────────────────────────────────────────────────
   if (httpCode >= 300 && httpCode < 400) {
     client.stop();
     if (location.length() == 0) { Serial.println("[OTA] redirect with no Location"); return false; }
@@ -258,26 +301,27 @@ bool otaDownloadAndFlash(const String& browserDownloadUrl,
       rPath.c_str(), rHost.c_str()
     );
 
-    httpCode = 0; contentLength = 0; location = "";
-    readHeaders(c2, httpCode, contentLength, location, 20000);
-    Serial.printf("[OTA] CDN HTTP %d  size=%u\n", httpCode, (unsigned)contentLength);
+    httpCode = 0; contentLength = 0; location = ""; isChunked = false;
+    readHeaders(c2, httpCode, contentLength, location, isChunked, 20000);
+    Serial.printf("[OTA] CDN HTTP %d  size=%u  chunked=%d\n",
+                  httpCode, (unsigned)contentLength, (int)isChunked);
 
     if (httpCode != 200) {
       Serial.printf("[OTA] CDN error %d\n", httpCode); c2.stop(); return false;
     }
 
-    bool ok = streamToFlash(c2, assetSize, progressCb);
+    bool ok = streamToFlash(c2, assetSize, isChunked, progressCb);
     c2.stop();
     return ok;
   }
 
-  // ── Direct 200 (no redirect) ──────────────────────────────────────────────
+  // ── Direct 200 (no redirect) ────────────────────────────────────────────
   if (httpCode != 200) {
     Serial.printf("[OTA] unexpected HTTP %d\n", httpCode);
     client.stop(); return false;
   }
 
-  bool ok = streamToFlash(client, assetSize, progressCb);
+  bool ok = streamToFlash(client, assetSize, isChunked, progressCb);
   client.stop();
   return ok;
 }
