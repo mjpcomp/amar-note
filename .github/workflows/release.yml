@@ -34,14 +34,14 @@ jobs:
         with:
           fetch-depth: 0   # full history required for tagging
 
-      # ── 2. Show current version ───────────────────────────────────────
+      # ── 2. Show current version ────────────────────────────────────────
       - name: Show current version
         run: |
           CURRENT=$(grep -oP '(?<=#define FIRMWARE_VERSION  ")v[^"]+' amar_note/config.h)
           echo "Current FIRMWARE_VERSION: $CURRENT"
           echo "New FIRMWARE_VERSION:     v${{ github.event.inputs.version }}"
 
-      # ── 3. Validate version format ────────────────────────────────────
+      # ── 3. Validate version format ───────────────────────────────────
       - name: Validate version
         run: |
           VERSION="${{ github.event.inputs.version }}"
@@ -50,12 +50,11 @@ jobs:
             exit 1
           fi
 
-      # ── 4. Bump FIRMWARE_VERSION in config.h ────────────────────────────
+      # ── 4. Bump FIRMWARE_VERSION in config.h ─────────────────────────────
       - name: Bump version in config.h
         run: |
           VERSION="v${{ github.event.inputs.version }}"
           sed -i "s|#define FIRMWARE_VERSION  \"v[^\"]*\"|#define FIRMWARE_VERSION  \"$VERSION\"|" amar_note/config.h
-          # Verify the change landed
           grep FIRMWARE_VERSION amar_note/config.h
 
       # ── 5. Commit + push version bump ─────────────────────────────────
@@ -67,13 +66,13 @@ jobs:
           git commit -m "chore: bump FIRMWARE_VERSION to v${{ github.event.inputs.version }}"
           git push
 
-      # ── 6. Create + push git tag ──────────────────────────────────────
+      # ── 6. Create + push git tag ─────────────────────────────────────
       - name: Tag release
         run: |
           git tag "v${{ github.event.inputs.version }}"
           git push origin "v${{ github.event.inputs.version }}"
 
-      # ── 7. Install + configure arduino-cli ─────────────────────────────
+      # ── 7. Install + configure arduino-cli ───────────────────────────
       - name: Install and configure arduino-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
@@ -81,56 +80,63 @@ jobs:
           arduino-cli config add board_manager.additional_urls \
             https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 
-      # ── 8. Install ESP32 core ───────────────────────────────────────────
+      # ── 8. Install ESP32 core ───────────────────────────────────────
       - name: Install ESP32 core
         run: |
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.2.0
 
-      # ── 9. Install libraries ──────────────────────────────────────────────
+      # ── 9. Install libraries ──────────────────────────────────────────
       - name: Install libraries
         run: |
           arduino-cli lib install \
             "ArduinoJson@7.3.1" \
             "Adafruit GFX Library"
 
-      # ── 10. Create secrets.h stub ────────────────────────────────────────
+      # ── 10. Create secrets.h stub ────────────────────────────────────
       - name: Create secrets.h stub
         run: |
           cat > amar_note/secrets.h << 'EOF'
           // CI stub — placeholder values; firmware uses NVS at runtime.
           #pragma once
-          #define WIFI_SSID  "...."
-          #define WIFI_PASS  "...."
-          #define OPENAI_KEY "...."
+          #define WIFI_SSID     "...."
+          #define WIFI_PASS     "...."
+          #define OPENAI_KEY    "...."
+          #define GITHUB_TOKEN  "...."
           EOF
 
-      # ── 11. Compile ─────────────────────────────────────────────────────
+      # ── 11. Compile ───────────────────────────────────────────────────────
+      # IMPORTANT: arduino-cli does NOT resolve `build.partitions=name` against
+      # the sketch directory — it falls back to the board default (1.2 MB).
+      # Use `build.custom_partitions` with the absolute workspace path so
+      # the 3 MB OTA slots in partitions.csv are actually applied.
       - name: Compile firmware
         run: |
+          PARTITIONS_PATH="${{ github.workspace }}/amar_note/partitions.csv"
           arduino-cli compile \
             --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PartitionScheme=custom \
-            --build-property build.partitions=partitions \
+            --build-property "build.custom_partitions=${PARTITIONS_PATH}" \
             --export-binaries \
             amar_note/amar_note.ino
 
-      # ── 12. Locate and rename binary ─────────────────────────────────────
+      # ── 12. Locate and rename binary ───────────────────────────────────
       # arduino-cli --export-binaries produces several .bin files:
-      #   *.ino.bin           — the standalone application binary  ← this is the OTA target
-      #   *.ino.merged.bin    — full flash image (bootloader + ptable + app concatenated)
-      #   *.ino.bootloader.bin
-      #   *.ino.partitions.bin
+      #   *.ino.bin           — standalone app binary  ← OTA target
+      #   *.ino.ota.bin       — raw image, no descriptor (esptool only)
+      #   *.ino.merged.bin    — full flash image (bootloader+ptable+app)
+      #   *.ino.bootloader.bin / *.ino.partitions.bin
       #
-      # OTA via Update.h requires ONLY the application binary.
-      # Flashing the merged image into the app partition corrupts the
-      # ESP-IDF image header and causes "efuse chip revision" errors at boot.
+      # OTA via Update.h requires ONLY *.ino.bin. Using any other variant
+      # causes Update.end() to fail: "invalid segment length 0xffffffff"
       - name: Locate and rename binary
         run: |
           echo "=== Build output ==="
           find amar_note/build -name '*.bin' | sort
           echo "===================="
-          # Target exactly *.ino.bin — excludes merged, bootloader, partitions
-          BIN=$(find amar_note/build -name '*.ino.bin' | head -1)
+          BIN=$(find amar_note/build -name '*.ino.bin' \
+                  ! -name '*.ota.bin' \
+                  ! -name '*.merged.bin' \
+                | head -1)
           if [ -z "$BIN" ]; then
             echo "::error::Could not find *.ino.bin in build output"
             exit 1
