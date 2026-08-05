@@ -27,7 +27,6 @@ jobs:
         uses: actions/checkout@v4
 
       # ── 2. Install + configure arduino-cli ──────────────────────────────
-      # Install to /usr/local/bin so it is on PATH for all subsequent steps.
       - name: Install and configure arduino-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
@@ -42,22 +41,14 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.2.0
 
-      # ── 4. Install libraries from Arduino Library Manager ─────────────────
-      # Only ArduinoJson and Adafruit GFX need separate installation.
-      # WebServer, HTTPUpdate, WiFiClientSecure, SD_MMC, FS ship with esp32:esp32.
-      # BSP headers (i2c_bsp, audio_bsp, epaper_driver_bsp, usb_msc) are
-      # project-local source files, not external libraries.
+      # ── 4. Install libraries ───────────────────────────────────────────────────
       - name: Install libraries
         run: |
           arduino-cli lib install \
             "ArduinoJson@7.3.1" \
             "Adafruit GFX Library"
 
-      # ── 5. Create secrets.h stub (CI build — no real keys needed) ─────────
-      # config_store.cpp reads WIFI_SSID, WIFI_PASS, and OPENAI_KEY from
-      # secrets.h and seeds NVS only if they are not placeholder dot-strings.
-      # Defining them as "...." here satisfies the compiler and the
-      # isPlaceholder() guard skips the NVS write at runtime.
+      # ── 5. Create secrets.h stub ─────────────────────────────────────────
       - name: Create secrets.h stub
         run: |
           cat > amar_note/secrets.h << 'EOF'
@@ -70,10 +61,8 @@ jobs:
 
       # ── 6. Compile ─────────────────────────────────────────────────────────
       # IMPORTANT: arduino-cli does NOT resolve `build.partitions=name` against
-      # the sketch directory — it falls back to the board default (1.2 MB) when
-      # the name isn't found in the core's partitions folder.  The correct way
-      # to use a project-local CSV is `build.custom_partitions` set to the
-      # absolute filesystem path of the file.
+      # the sketch directory — use `build.custom_partitions` with the absolute
+      # path to the project CSV so the 3 MB OTA slots are used.
       - name: Compile firmware
         run: |
           PARTITIONS_PATH="${{ github.workspace }}/amar_note/partitions.csv"
@@ -83,11 +72,30 @@ jobs:
             --export-binaries \
             amar_note/amar_note.ino
 
-      # ── 7. Rename .bin for clarity ─────────────────────────────────────────
-      - name: Rename binary
+      # ── 7. Select correct binary for OTA ───────────────────────────────────
+      # arduino-cli --export-binaries produces several .bin files:
+      #   *.ino.bin          <- standard app image (offset 0x10000) — THIS is
+      #                         what Update.h needs for OTA flashing.
+      #   *.ino.ota.bin      <- raw image with no descriptor, for esptool only.
+      #   *.ino.merged.bin   <- full flash image (bootloader + parts + app).
+      #   *.ino.bootloader.bin / *.ino.partitions.bin
+      #
+      # Using the .ota.bin or .merged.bin causes Update.end() to fail:
+      #   E esp_image: invalid segment length 0xffffffff
+      #   Could Not Activate The Firmware
+      # because esp_image validation expects the standard app image format.
+      #
+      # Fix: match *.ino.bin and explicitly exclude the ota/merged variants.
+      - name: Select and rename binary
         run: |
-          BIN=$(find amar_note/build -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -1)
-          echo "Found binary: $BIN"
+          BIN=$(find amar_note/build -name '*.ino.bin' \
+                  ! -name '*.ota.bin' \
+                  ! -name '*.merged.bin' \
+                  ! -name '*bootloader*' \
+                  ! -name '*partitions*' \
+                | head -1)
+          echo "Selected binary: $BIN"
+          ls -lh amar_note/build/ || true
           cp "$BIN" amar-note-firmware.bin
 
       # ── 8. Upload artifact (every build) ──────────────────────────────────
