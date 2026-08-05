@@ -682,6 +682,19 @@ void showError(const char* msg) {
   refresh();
 }
 
+void showOtaFailed(const char* msg) {
+  clearWhite();
+  drawKicker("update", 18);
+  iconError(100, 70);
+  if (msg && strlen(msg) > 0) drawStrC(100, 118, msg, 1, BLACK);
+  else drawStrC(100, 118, "flash failed", 1, BLACK);
+  hline(0, 179, W, BLACK);
+  fillRect(0, 180, W, 20, WHITE);
+  const char* hint = "press any button";
+  drawStrC(100, 186, hint, 1, BLACK);
+  refresh();
+}
+
 void showUltraSleepScreen() {
   clearWhite();
   #ifdef LOGO_WIDTH
