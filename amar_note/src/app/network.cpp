@@ -965,8 +965,16 @@ static void otaTask(void* /*param*/) {
   } else {
     g_otaPct   = 0;
     g_otaStage = "failed";
-    showError("ota failed");
+    showOtaFailed("flash failed");
     Serial.println("[OTA] flash failed");
+
+    // Wait for either button to be pressed before handing control back.
+    // Both pins are active-LOW (INPUT_PULLUP), same as the rest of the codebase.
+    while (digitalRead(BTN_REC) == HIGH && digitalRead(BTN_PWR) == HIGH) {
+      delay(20);
+    }
+    // Brief debounce, then let the port loop continue normally.
+    delay(80);
   }
   vTaskDelete(nullptr);
 }
